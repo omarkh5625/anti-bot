@@ -1506,6 +1506,14 @@ $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
  * Helps detect bot UA rotation patterns
  */
 function generate_user_agent_hash($user_agent) {
+    // Input validation
+    if (empty($user_agent) || !is_string($user_agent)) {
+        return hash('sha256', 'empty_ua');
+    }
+    
+    // Limit input size to prevent memory issues
+    $user_agent = substr($user_agent, 0, 1000);
+    
     return hash('sha256', $user_agent);
 }
 
@@ -1513,12 +1521,18 @@ function generate_user_agent_hash($user_agent) {
 define('UA_HASH_MAX_LENGTH', 200); // Maximum UA length to store
 define('UA_HASH_ROTATION_WINDOW', 3600); // 1 hour in seconds
 define('UA_HASH_RETENTION_DAYS', 7); // Days to keep old hashes
+define('SECONDS_PER_DAY', 86400); // Seconds in one day
 
 /**
  * Sanitize User-Agent string for logging
  * Removes newlines and control characters to prevent log injection
  */
 function sanitize_user_agent($user_agent) {
+    // Handle null or empty input
+    if (empty($user_agent) || !is_string($user_agent)) {
+        return 'empty_ua';
+    }
+    
     // Remove newlines, carriage returns, and control characters
     $sanitized = preg_replace('/[\x00-\x1F\x7F]/', '', $user_agent);
     // Limit length
@@ -1581,7 +1595,7 @@ function validate_user_agent_hash($ip, $current_ua) {
     ];
     
     // Cleanup old entries
-    $cutoff = time() - (UA_HASH_RETENTION_DAYS * 86400);
+    $cutoff = time() - (UA_HASH_RETENTION_DAYS * SECONDS_PER_DAY);
     foreach ($ua_hashes as $ip_key => $data) {
         if (($data['timestamp'] ?? 0) < $cutoff) {
             unset($ua_hashes[$ip_key]);
@@ -1605,9 +1619,18 @@ $ua_hash_valid = validate_user_agent_hash($client_ip, $user_agent);
 if (!$ua_hash_valid) {
     // Suspicious UA rotation detected - sanitize UA before logging
     $safe_ua = sanitize_user_agent($user_agent);
-    file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
-        date("Y-m-d H:i:s") . " | UA_HASH_ROTATION | IP: {$client_ip} | UA: {$safe_ua}\n", 
-        FILE_APPEND);
+    $log_dir = __DIR__ . '/logs';
+    
+    // Ensure log directory exists and is writable
+    if (!is_dir($log_dir)) {
+        @mkdir($log_dir, 0750, true);
+    }
+    
+    if (is_dir($log_dir) && is_writable($log_dir)) {
+        @file_put_contents($LOG_FILE ?? $log_dir . '/antibot.log', 
+            date("Y-m-d H:i:s") . " | UA_HASH_ROTATION | IP: {$client_ip} | UA: {$safe_ua}\n", 
+            FILE_APPEND);
+    }
     
     // Force re-verification
     setcookie('fp_hash', '', time() - 3600, '/');
