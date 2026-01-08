@@ -17,10 +17,15 @@ define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
 
 // Ensure logs directory exists
 if (!is_dir(__DIR__ . '/logs')) {
-    @mkdir(__DIR__ . '/logs', 0755, true);
+    $dir_created = @mkdir(__DIR__ . '/logs', 0755, true);
+    if (!$dir_created && !is_dir(__DIR__ . '/logs')) {
+        error_log('Anti-bot: Failed to create logs directory');
+    }
 }
 
-file_put_contents('logs/blocked.txt', $_SERVER['REMOTE_ADDR']." | ".$_SERVER['HTTP_USER_AGENT']."\n", FILE_APPEND);
+if (is_dir(__DIR__ . '/logs')) {
+    file_put_contents('logs/blocked.txt', $_SERVER['REMOTE_ADDR']." | ".$_SERVER['HTTP_USER_AGENT']."\n", FILE_APPEND);
+}
 
 // دوال fingerprint
 function load_fingerprints() {
@@ -57,7 +62,11 @@ function track_temporal_behavior($ip, $action, $timestamp, $data = []) {
         $behaviors[$ip] = ['sessions' => [], 'first_seen' => time()];
     }
     
-    $session_id = $_COOKIE['session_id'] ?? session_id();
+    // Sanitize session ID from cookie or use PHP's session_id()
+    $raw_session_id = $_COOKIE['session_id'] ?? session_id();
+    $session_id = preg_replace('/[^a-zA-Z0-9_-]/', '', $raw_session_id);
+    $session_id = substr($session_id, 0, 64); // Limit length
+    
     if (!isset($behaviors[$ip]['sessions'][$session_id])) {
         $behaviors[$ip]['sessions'][$session_id] = ['actions' => [], 'start_time' => time()];
     }
@@ -100,6 +109,8 @@ function analyze_temporal_patterns($ip) {
         }
         
         // Check for absence of hesitation (all actions too fast)
+        // Threshold: 100ms - Human users typically take at least 100ms between actions
+        // due to perception, decision-making, and motor response time
         $avg_timing = array_sum($timings) / max(count($timings), 1);
         if ($avg_timing < 100) { // Less than 100ms average
             $score += 25;
@@ -258,7 +269,8 @@ function analyze_session_continuity($ip) {
     sort($session_times);
     for ($i = 1; $i < count($session_times); $i++) {
         $gap = $session_times[$i] - $session_times[$i-1];
-        // If sessions are suspiciously close (less than 5 seconds apart)
+        // Threshold: 5 seconds - Legitimate users typically have larger gaps between sessions
+        // Sessions less than 5 seconds apart indicate automated behavior without natural delays
         if ($gap < 5) {
             $score += 30;
             $reasons[] = 'Suspicious session timing, missing resume logic';
@@ -939,7 +951,15 @@ if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash']) && $show_warning_ui) {
 if (isset($_POST['track_behavior']) && isset($_POST['behavior_data'])) {
     header('Content-Type: application/json');
     
-    $behavior_data = json_decode($_POST['behavior_data'], true);
+    $raw_data = $_POST['behavior_data'];
+    
+    // Validate size to prevent memory exhaustion (max 100KB)
+    if (strlen($raw_data) > 102400) {
+        echo json_encode(['status' => 'error', 'message' => 'Data too large']);
+        exit;
+    }
+    
+    $behavior_data = json_decode($raw_data, true);
     if ($behavior_data && is_array($behavior_data)) {
         $client_ip = get_client_ip();
         $action = $behavior_data['action'] ?? 'unknown';

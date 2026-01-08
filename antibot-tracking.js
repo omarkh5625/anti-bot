@@ -14,12 +14,13 @@
     
     // Initialize session ID
     const sessionId = sessionStorage.getItem('antibot_session_id') || 
-                     'sess_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                     'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
     sessionStorage.setItem('antibot_session_id', sessionId);
     
     const behaviorTracker = {
         sessionStart: Date.now(),
         lastActionTime: Date.now(),
+        lastSendTime: Date.now(),
         actions: [],
         mouseMovements: [],
         clicks: [],
@@ -42,7 +43,7 @@
             this.lastActionTime = now;
             
             // Send to server periodically (every 10 actions or 30 seconds)
-            if (this.actions.length >= 10 || (now - this.sessionStart) % 30000 < 100) {
+            if (this.actions.length >= 10 || (now - this.lastSendTime) > 30000) {
                 this.sendToServer();
             }
         },
@@ -50,6 +51,8 @@
         // Send collected data to server
         sendToServer: function() {
             if (this.actions.length === 0) return;
+            
+            this.lastSendTime = Date.now(); // Update send time
             
             const data = {
                 session_id: sessionId,
@@ -309,10 +312,12 @@
         }
     }, 30000);
     
-    // Expose for debugging (remove in production)
-    if (window.location.search.includes('debug=antibot')) {
-        window.antibotTracker = behaviorTracker;
-        console.log('Anti-bot tracker initialized in debug mode');
-    }
+    // Note: Debug mode is disabled in production for security
+    // Exposing tracker object could allow manipulation of behavioral data
+    // For debugging during development only, uncomment the following:
+    // if (window.location.search.includes('debug=antibot')) {
+    //     window.antibotTracker = behaviorTracker;
+    //     console.log('Anti-bot tracker initialized in debug mode');
+    // }
     
 })();
