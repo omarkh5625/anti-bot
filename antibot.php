@@ -2831,14 +2831,52 @@ if ($is_first_visit) {
 
 // Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
 if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
-    $bot_analysis = calculate_bot_confidence($client_ip);
-    
-    // Extract bot characteristics for logging
+    // Check if we have sufficient behavioral data before analyzing
     $behavior_data = load_behavior_data();
     $ip_data = $behavior_data[$client_ip] ?? [];
-    $characteristics = [];
+    $has_sufficient_data = false;
     
-    if (isset($ip_data['sessions'])) {
+    // We need at least some actions recorded to make a decision
+    if (isset($ip_data['sessions']) && !empty($ip_data['sessions'])) {
+        $total_actions = 0;
+        foreach ($ip_data['sessions'] as $session) {
+            if (isset($session['actions'])) {
+                $total_actions += count($session['actions']);
+            }
+        }
+        // Require at least 3 actions to have meaningful data
+        $has_sufficient_data = $total_actions >= 3;
+    }
+    
+    // If insufficient data, default to showing verification page (uncertain case)
+    if (!$has_sufficient_data) {
+        // Generate dynamic fingerprint for this session
+        $dynamic_fp = generate_dynamic_fingerprint($client_ip);
+        save_fingerprint($client_ip, $dynamic_fp);
+        
+        // Set cookies to prevent loop and show verification
+        setcookie('js_verified', 'pending', time() + 300, '/'); // 5 minute temporary
+        
+        // Show verification page - will be handled by the uncertain case below
+        $bot_analysis = [
+            'confidence' => 50, // Middle ground
+            'is_confident_human' => false,
+            'is_uncertain' => true,
+            'is_likely_bot' => false,
+            'reasons' => ['Insufficient behavioral data for analysis'],
+            'domain_scores' => []
+        ];
+        $characteristics = ['note' => 'First-time visitor, insufficient data'];
+    } else {
+        // We have sufficient data, perform analysis
+        $bot_analysis = calculate_bot_confidence($client_ip);
+    }
+    
+    // Extract bot characteristics for logging
+    $characteristics = $characteristics ?? [];
+    
+    // Only extract detailed characteristics if we have sufficient data
+    if (isset($ip_data['sessions']) && $has_sufficient_data) {
         $sessions = $ip_data['sessions'];
         $characteristics['sessions'] = count($sessions);
         
