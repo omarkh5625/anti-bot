@@ -1,0 +1,17 @@
+# Protect configuration and sensitive files from direct access
+<FilesMatch "^(config\.php|\.gitignore|\.git)">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Protect log files
+<FilesMatch "\.(log|json)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Protect the logs directory
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^logs/ - [F,L]
+</IfModule>

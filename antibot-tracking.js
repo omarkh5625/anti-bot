@@ -14,10 +14,156 @@
     'use strict';
     
     // ============================================
-    // ADVANCED BOT DETECTION - Selenium/WebDriver
+    // CONSTANTS
     // ============================================
+    
+    // Blank canvas data URL for bot detection
+    // This is the base64-encoded image of a 1x1 transparent PNG
+    const BLANK_CANVAS_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==';
+    
+    // ============================================
+    // ADVANCED BOT DETECTION - Selenium/WebDriver/Stealth
+    // ============================================
+    
+    /**
+     * Simple hash function for fingerprinting
+     */
+    function simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return hash.toString(36);
+    }
+    
     function detectAutomation() {
         const flags = [];
+        
+        // STEALTH BOT DETECTION - Playwright Stealth & Puppeteer Stealth
+        
+        // 1a. Playwright Stealth detection
+        // Playwright-stealth leaves traces even when trying to hide
+        try {
+            // Check for stealth plugin artifacts
+            if (window.navigator.webdriver === false) {
+                // Stealth plugins set this to false, but real browsers don't have the property at all
+                flags.push('playwright_stealth_webdriver_false');
+            }
+            
+            // Check for modified toString() on navigator properties
+            if (navigator.permissions && navigator.permissions.query) {
+                const toStringResult = navigator.permissions.query.toString();
+                if (toStringResult.includes('native code') === false) {
+                    flags.push('playwright_stealth_modified_permissions');
+                }
+            }
+            
+            // Check for Chrome runtime inconsistencies (Playwright specific)
+            if (window.chrome && !window.chrome.runtime && /Chrome/.test(navigator.userAgent)) {
+                flags.push('playwright_stealth_missing_chrome_runtime');
+            }
+            
+            // Playwright detection via Object.getOwnPropertyDescriptor evasion
+            try {
+                const descriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+                if (descriptor && descriptor.get && descriptor.get.toString().includes('return false')) {
+                    flags.push('playwright_stealth_descriptor_modified');
+                }
+            } catch (e) {}
+            
+            // Check for plugin inconsistencies
+            if (navigator.plugins.length === 0 && 
+                navigator.mimeTypes.length === 0 && 
+                /Chrome/.test(navigator.userAgent)) {
+                flags.push('playwright_stealth_no_plugins_chrome');
+            }
+            
+        } catch (e) {
+            flags.push('playwright_stealth_detection_error');
+        }
+        
+        // 1b. Puppeteer Stealth detection
+        try {
+            // Check for Puppeteer-specific window properties
+            if (window.navigator.plugins.length === 0 && 
+                window.navigator.mimeTypes.length === 0) {
+                flags.push('puppeteer_stealth_empty_plugins');
+            }
+            
+            // Check for override attempts on navigator.languages
+            const languagesDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages');
+            if (languagesDescriptor && languagesDescriptor.get) {
+                const getterString = languagesDescriptor.get.toString();
+                if (getterString.length < 100 && !getterString.includes('[native code]')) {
+                    flags.push('puppeteer_stealth_languages_override');
+                }
+            }
+            
+            // Check for puppeteer-specific user agent patterns
+            const ua = navigator.userAgent;
+            if (ua.includes('HeadlessChrome') || 
+                (ua.includes('Chrome') && !ua.includes('Edge') && !window.chrome)) {
+                flags.push('puppeteer_stealth_headless_ua');
+            }
+            
+            // Detection via media devices
+            if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+                navigator.mediaDevices.enumerateDevices().then(devices => {
+                    if (devices.length === 0) {
+                        flags.push('puppeteer_stealth_no_media_devices');
+                    }
+                }).catch(() => {});
+            }
+            
+            // Check for screen dimensions inconsistencies
+            if (screen.width === 0 || screen.height === 0 || 
+                screen.availWidth === 0 || screen.availHeight === 0) {
+                flags.push('puppeteer_stealth_invalid_screen');
+            }
+            
+            // Advanced: Check for Proxy detection on navigator
+            try {
+                const navigatorProto = Navigator.prototype;
+                const webdriverGetter = Object.getOwnPropertyDescriptor(navigatorProto, 'webdriver');
+                if (webdriverGetter && webdriverGetter.get) {
+                    const getterCode = webdriverGetter.get.toString();
+                    // Puppeteer-stealth uses proxies that have specific patterns
+                    if (getterCode.includes('Proxy') || getterCode.length < 50) {
+                        flags.push('puppeteer_stealth_proxy_detected');
+                    }
+                }
+            } catch (e) {}
+            
+        } catch (e) {
+            flags.push('puppeteer_stealth_detection_error');
+        }
+        
+        // 1c. Detection via Browser Automation Detection (general stealth)
+        try {
+            // Check for inconsistencies in performance.timing
+            if (window.performance && window.performance.timing) {
+                const timing = window.performance.timing;
+                // Automation tools often have unusual timing patterns
+                if (timing.loadEventEnd - timing.navigationStart < 100) {
+                    flags.push('stealth_suspicious_load_time');
+                }
+            }
+            
+            // Check for battery API (often missing in headless)
+            if (!navigator.getBattery && /Chrome|Firefox/.test(navigator.userAgent)) {
+                flags.push('stealth_missing_battery_api');
+            }
+            
+            // Check for connection API inconsistencies
+            if (navigator.connection) {
+                if (navigator.connection.rtt === 0 || navigator.connection.downlink === 0) {
+                    flags.push('stealth_fake_connection_info');
+                }
+            }
+            
+        } catch (e) {}
         
         // 1. Check for navigator.webdriver (Selenium/WebDriver)
         if (navigator.webdriver === true) {
@@ -117,6 +263,79 @@
             }
         } catch (e) {
             flags.push('webgl_error');
+        }
+        
+        // 6a. Canvas Fingerprinting for bot detection
+        try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                // Draw text for fingerprinting
+                ctx.textBaseline = 'top';
+                ctx.font = '14px Arial';
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillStyle = '#f60';
+                ctx.fillRect(125, 1, 62, 20);
+                ctx.fillStyle = '#069';
+                ctx.fillText('AntiBot,123', 2, 15);
+                ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+                ctx.fillText('AntiBot,123', 4, 17);
+                
+                // Get canvas data
+                const canvasData = canvas.toDataURL();
+                
+                // Check for blank canvas (common in bots)
+                if (canvasData === BLANK_CANVAS_DATA_URL) {
+                    flags.push('canvas_blank_output');
+                }
+                
+                // Check for consistent canvas output (bots produce identical outputs)
+                const canvasHash = simpleHash(canvasData);
+                sessionStorage.setItem('antibot_canvas_hash', canvasHash);
+            }
+        } catch (e) {
+            flags.push('canvas_fingerprint_blocked');
+        }
+        
+        // 6b. Audio Context Fingerprinting
+        try {
+            if (window.AudioContext || window.webkitAudioContext) {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                const audioContext = new AudioContextClass();
+                const oscillator = audioContext.createOscillator();
+                const analyser = audioContext.createAnalyser();
+                const gainNode = audioContext.createGain();
+                const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+                
+                gainNode.gain.value = 0; // Silent
+                oscillator.connect(analyser);
+                analyser.connect(scriptProcessor);
+                scriptProcessor.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.start(0);
+                
+                scriptProcessor.onaudioprocess = function(event) {
+                    const output = event.outputBuffer.getChannelData(0);
+                    // Check for audio processing capability
+                    if (output.length === 0 || output.every(val => val === 0)) {
+                        flags.push('audio_processing_fake');
+                    }
+                    audioContext.close();
+                };
+                
+                // Timeout cleanup
+                setTimeout(() => {
+                    try {
+                        audioContext.close();
+                    } catch (e) {}
+                }, 100);
+            } else {
+                // Audio API not available (suspicious in modern browsers)
+                flags.push('audio_context_unavailable');
+            }
+        } catch (e) {
+            flags.push('audio_fingerprint_error');
         }
         
         // 7. Check for inconsistent window properties
