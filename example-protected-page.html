@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected Page Example - Anti-Bot System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 { color: #2c3e50; }
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .feature {
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .feature h3 { margin-top: 0; color: #495057; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+    </style>
+</head>
+<body>
+    <?php
+    // Include the anti-bot protection at the top of your page
+    // require_once 'antibot.php';
+    
+    // For demonstration purposes, we'll show the integration example
+    ?>
+    
+    <h1>🛡️ Protected Page Example</h1>
+    
+    <div class="info-box">
+        <strong>Anti-Bot Protection Active</strong>
+        <p>This page demonstrates how the anti-bot system works. The behavioral tracking is happening in the background as you interact with this page.</p>
+    </div>
+
+    <h2>What's Being Monitored?</h2>
+    
+    <div class="feature">
+        <h3>⏱️ Temporal Behavior</h3>
+        <p>Your interaction timing patterns, click intervals, and reading speeds are monitored to detect bot-like behavior.</p>
+        <button onclick="handleClick('temporal')">Click Me</button>
+        <button onclick="handleClick('temporal')">And Me</button>
+        <button onclick="handleClick('temporal')">And Me Too</button>
+    </div>
+
+    <div class="feature">
+        <h3>🎯 Interaction Noise</h3>
+        <p>Human users make small errors, hesitate, and sometimes cancel actions. Bots tend to be too perfect.</p>
+        <input type="text" placeholder="Try typing and making corrections..." style="width: 100%; padding: 8px; margin: 5px 0;">
+    </div>
+
+    <div class="feature">
+        <h3>🎨 UI Semantics</h3>
+        <p>The system tracks whether you interact with decorative elements vs functional ones.</p>
+        <div style="display: flex; gap: 10px; margin: 10px 0;">
+            <button onclick="handleClick('functional')">Functional Button</button>
+            <div style="padding: 10px; background: #e9ecef; border-radius: 4px;">Decorative Element</div>
+        </div>
+    </div>
+
+    <div class="feature">
+        <h3>🔄 Session Continuity</h3>
+        <p>Navigation patterns and session behavior are tracked across your visit.</p>
+        <button onclick="simulateNavigation()">Simulate Navigation</button>
+    </div>
+
+    <h2>Integration Code</h2>
+    
+    <div class="feature">
+        <h3>Step 1: Include Anti-Bot Protection</h3>
+        <pre style="background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto;"><code>&lt;?php
+// At the top of your PHP file
+require_once 'antibot.php';
+?&gt;</code></pre>
+    </div>
+
+    <div class="feature">
+        <h3>Step 2: Add Behavioral Tracking Script</h3>
+        <pre style="background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto;"><code>&lt;!-- Before closing &lt;/body&gt; tag --&gt;
+&lt;script src="/antibot-tracking.js"&gt;&lt;/script&gt;</code></pre>
+    </div>
+
+    <div class="feature">
+        <h3>Step 3: Configure Your Settings</h3>
+        <pre style="background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto;"><code>// Copy config.php.example to config.php
+// Update with your API keys and settings
+cp config.php.example config.php</code></pre>
+    </div>
+
+    <h2>How It Works</h2>
+    
+    <div class="info-box">
+        <p><strong>For Confident Humans (Bot Score &lt; 20%):</strong><br>
+        Seamless access - no verification required!</p>
+        
+        <p><strong>For Uncertain Cases (Bot Score 20-60%):</strong><br>
+        Simple CAPTCHA verification - just check a box.</p>
+        
+        <p><strong>For Likely Bots (Bot Score ≥ 60%):</strong><br>
+        Immediate block with detailed logging.</p>
+    </div>
+
+    <div id="status" class="status info" style="display: none;">
+        Behavioral data is being collected...
+    </div>
+
+    <script>
+        let clickCount = 0;
+        
+        function handleClick(type) {
+            clickCount++;
+            const status = document.getElementById('status');
+            status.style.display = 'block';
+            status.className = 'status success';
+            status.textContent = `✓ Click ${clickCount} registered - ${type} interaction tracked`;
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 2000);
+        }
+        
+        function simulateNavigation() {
+            const status = document.getElementById('status');
+            status.style.display = 'block';
+            status.className = 'status info';
+            status.textContent = '🔄 Navigation event tracked - session continuity monitored';
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 2000);
+        }
+        
+        // Show that tracking is active
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                const status = document.getElementById('status');
+                status.style.display = 'block';
+                status.textContent = '👁️ Behavioral tracking active - interact naturally to avoid false positives';
+                
+                setTimeout(() => {
+                    status.style.display = 'none';
+                }, 3000);
+            }, 500);
+        });
+    </script>
+
+    <!-- Include the tracking script -->
+    <script src="antibot-tracking.js"></script>
+</body>
+</html>
