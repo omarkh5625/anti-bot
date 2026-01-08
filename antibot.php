@@ -2746,7 +2746,8 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 // -------------------------------------------------
 
 // Check if this is first visit (no analysis done yet)
-$is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
+// Also skip first visit if _ab_skip parameter is present (fallback for cookie failures)
+$is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']) && !isset($_GET['_ab_skip']);
 
 if ($is_first_visit) {
     // First visit: Show analysis page for 5 seconds to collect behavioral data
@@ -2814,7 +2815,11 @@ if ($is_first_visit) {
         // Set a flag in sessionStorage to prevent infinite loops
         if (sessionStorage.getItem('antibot_first_check_done')) {
           // Already did first check, skip directly to verification
-          window.location.href = window.location.href + (window.location.href.includes('?') ? '&' : '?') + '_ab_skip=1';
+          var currentUrl = window.location.href;
+          // Remove any existing _ab_skip parameter to avoid duplicates
+          currentUrl = currentUrl.replace(/([?&])_ab_skip=1(&|$)/, '$1').replace(/[?&]$/, '');
+          // Add _ab_skip parameter
+          window.location.href = currentUrl + (currentUrl.includes('?') ? '&' : '?') + '_ab_skip=1';
         } else {
           sessionStorage.setItem('antibot_first_check_done', '1');
           
