@@ -938,11 +938,11 @@ $recent_attempts = get_recent_attempts(50);
                         <div class="domain-contribution">Contribution: ${(domains.temporal * 0.3).toFixed(1)}%</div>
                     </div>`;
                 }
-                if (domains.interaction !== undefined) {
+                if (domains.noise !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🎯 Interaction Noise (25%)</div>
-                        <div class="domain-score">${domains.interaction}%</div>
-                        <div class="domain-contribution">Contribution: ${(domains.interaction * 0.25).toFixed(1)}%</div>
+                        <div class="domain-score">${domains.noise}%</div>
+                        <div class="domain-contribution">Contribution: ${(domains.noise * 0.25).toFixed(1)}%</div>
                     </div>`;
                 }
                 if (domains.semantics !== undefined) {

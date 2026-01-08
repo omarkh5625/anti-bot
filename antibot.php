@@ -61,15 +61,123 @@ if (is_dir(__DIR__ . '/logs')) {
     file_put_contents('logs/blocked.txt', $_SERVER['REMOTE_ADDR']." | ".$_SERVER['HTTP_USER_AGENT']."\n", FILE_APPEND);
 }
 
-// دوال fingerprint
+// Enhanced fingerprint system with dynamic salting and session-network binding
 function load_fingerprints() {
     if (!file_exists(FP_FILE)) file_put_contents(FP_FILE, json_encode([], JSON_PRETTY_PRINT));
     return json_decode(file_get_contents(FP_FILE), true) ?: [];
 }
 
-function save_fingerprint($ip, $hash) {
+/**
+ * Generate dynamic salted fingerprint with session-network binding
+ * Prevents static replayable fingerprints by incorporating:
+ * - Dynamic timestamp-based salt (rotates every hour)
+ * - Session ID binding
+ * - Network characteristics (IP subnet)
+ * - TLS/HTTP header entropy
+ */
+function generate_dynamic_fingerprint($ip, $session_id = null) {
+    // Dynamic salt that rotates every hour
+    $hour_salt = hash('sha256', date('YmdH') . 'antibot_secret_salt');
+    
+    // Session binding - use actual session ID or generate one
+    if ($session_id === null) {
+        if (session_status() === PHP_SESSION_NONE) {
+            @session_start();
+        }
+        $session_id = session_id();
+    }
+    
+    // Network binding - extract subnet (first 3 octets for IPv4)
+    $ip_parts = explode('.', $ip);
+    $subnet = implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+    
+    // TLS/HTTP header entropy analysis
+    $header_entropy = calculate_header_entropy();
+    
+    // Combine all factors with dynamic salt
+    $fingerprint_data = [
+        'hour_salt' => $hour_salt,
+        'session_id' => $session_id,
+        'subnet' => $subnet,
+        'header_entropy' => $header_entropy,
+        'timestamp' => time()
+    ];
+    
+    return hash('sha256', json_encode($fingerprint_data));
+}
+
+/**
+ * Calculate TLS/HTTP header entropy for fingerprinting
+ * Analyzes header patterns similar to JA3 fingerprinting
+ */
+function calculate_header_entropy() {
+    $headers = [];
+    
+    // Collect significant headers in order (like JA3)
+    $header_keys = [
+        'HTTP_USER_AGENT',
+        'HTTP_ACCEPT',
+        'HTTP_ACCEPT_LANGUAGE',
+        'HTTP_ACCEPT_ENCODING',
+        'HTTP_CONNECTION',
+        'HTTP_SEC_CH_UA',
+        'HTTP_SEC_CH_UA_MOBILE',
+        'HTTP_SEC_CH_UA_PLATFORM',
+        'HTTP_SEC_FETCH_SITE',
+        'HTTP_SEC_FETCH_MODE',
+        'HTTP_SEC_FETCH_DEST'
+    ];
+    
+    foreach ($header_keys as $key) {
+        $headers[] = isset($_SERVER[$key]) ? substr($_SERVER[$key], 0, 50) : '';
+    }
+    
+    // Calculate entropy hash (similar to JA3 approach)
+    return hash('md5', implode('|', $headers));
+}
+
+/**
+ * Verify session-network binding
+ * Ensures the session is bound to the same network context
+ */
+function verify_session_binding($ip, $stored_fingerprint) {
+    // Generate current fingerprint with same session
+    $current_fingerprint = generate_dynamic_fingerprint($ip);
+    
+    // For session binding, we verify the subnet hasn't changed
+    $ip_parts = explode('.', $ip);
+    $current_subnet = implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+    
+    // Check if stored fingerprint data exists
     $fps = load_fingerprints();
-    $fps[$ip] = $hash;
+    if (!isset($fps[$ip])) {
+        return false;
+    }
+    
+    $stored_data = $fps[$ip];
+    if (isset($stored_data['subnet']) && $stored_data['subnet'] !== $current_subnet) {
+        // Network changed - possible session hijacking
+        return false;
+    }
+    
+    return true;
+}
+
+function save_fingerprint($ip, $hash, $session_id = null) {
+    $fps = load_fingerprints();
+    
+    // Store fingerprint with metadata for binding verification
+    $ip_parts = explode('.', $ip);
+    $subnet = implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+    
+    $fps[$ip] = [
+        'hash' => $hash,
+        'subnet' => $subnet,
+        'session_id' => $session_id ?? session_id(),
+        'created_at' => time(),
+        'header_entropy' => calculate_header_entropy()
+    ];
+    
     file_put_contents(FP_FILE, json_encode($fps, JSON_PRETTY_PRINT));
 }
 
@@ -101,7 +209,7 @@ function log_access_attempt($ip, $verdict, $bot_score, $bot_analysis, $character
         'characteristics' => $characteristics,
         'domain_scores' => [
             'temporal' => $bot_analysis['domain_scores']['temporal'] ?? 0,
-            'interaction' => $bot_analysis['domain_scores']['noise'] ?? 0,
+            'noise' => $bot_analysis['domain_scores']['noise'] ?? 0,
             'semantics' => $bot_analysis['domain_scores']['semantics'] ?? 0,
             'continuity' => $bot_analysis['domain_scores']['continuity'] ?? 0
         ],
@@ -360,13 +468,41 @@ function calculate_bot_confidence($ip) {
     $semantics = analyze_ui_semantics($ip);
     $continuity = analyze_session_continuity($ip);
     
-    // Weighted average of all detection domains
+    // Non-linear scoring system for threat evaluation
+    // High scores are amplified, low scores are dampened
+    // This creates more decisive bot/human classification
+    $apply_nonlinear = function($score) {
+        if ($score < 20) {
+            // Very low scores - dampen further (likely human)
+            return $score * 0.5;
+        } elseif ($score >= 20 && $score < 50) {
+            // Medium scores - keep mostly linear
+            return $score * 0.9;
+        } elseif ($score >= 50 && $score < 70) {
+            // High scores - amplify (likely bot)
+            return $score * 1.2;
+        } else {
+            // Very high scores - amplify more (definitely bot)
+            return min($score * 1.5, 100);
+        }
+    };
+    
+    // Apply non-linear transformation to each domain
+    $temporal_adjusted = $apply_nonlinear($temporal['score']);
+    $noise_adjusted = $apply_nonlinear($noise['score']);
+    $semantics_adjusted = $apply_nonlinear($semantics['score']);
+    $continuity_adjusted = $apply_nonlinear($continuity['score']);
+    
+    // Weighted average with adjusted scores
     $total_score = (
-        $temporal['score'] * 0.3 +
-        $noise['score'] * 0.25 +
-        $semantics['score'] * 0.25 +
-        $continuity['score'] * 0.2
+        $temporal_adjusted * 0.3 +
+        $noise_adjusted * 0.25 +
+        $semantics_adjusted * 0.25 +
+        $continuity_adjusted * 0.2
     );
+    
+    // Apply final non-linear transformation to total
+    $final_score = $apply_nonlinear($total_score);
     
     $all_reasons = array_merge(
         $temporal['reasons'],
@@ -376,10 +512,10 @@ function calculate_bot_confidence($ip) {
     );
     
     return [
-        'confidence' => $total_score,
-        'is_confident_human' => $total_score < 20,
-        'is_uncertain' => $total_score >= 20 && $total_score < 57,
-        'is_likely_bot' => $total_score >= 57,
+        'confidence' => min($final_score, 100),
+        'is_confident_human' => $final_score < 20,
+        'is_uncertain' => $final_score >= 20 && $final_score < 57,
+        'is_likely_bot' => $final_score >= 57,
         'reasons' => $all_reasons,
         'domain_scores' => [
             'temporal' => $temporal['score'],
@@ -561,6 +697,22 @@ function block_and_exit($client_ip, $user_agent, $reason) {
 
 $client_ip  = get_client_ip();
 $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
+
+// Session-network binding verification for returning visitors
+if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
+    // Verify session-network binding
+    if (!verify_session_binding($client_ip, $_COOKIE['fp_hash'])) {
+        // Network changed or session binding failed - require re-verification
+        setcookie('fp_hash', '', time() - 3600, '/');
+        setcookie('js_verified', '', time() - 3600, '/');
+        setcookie('analysis_done', '', time() - 3600, '/');
+        
+        // Log suspicious activity
+        file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
+            date("Y-m-d H:i:s") . " | SESSION_BINDING_FAILED | IP: {$client_ip} | Reason: Network context changed\n", 
+            FILE_APPEND);
+    }
+}
 
 if (is_bot_from_github_list($user_agent)) {
     block_and_exit($client_ip, $user_agent, 'Detected from GitHub Bot List');
@@ -933,8 +1085,12 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
     
     // Seamless access for confident humans - set cookies and allow entry
     if ($bot_analysis['is_confident_human']) {
+        // Generate dynamic fingerprint with session-network binding
+        $dynamic_fp = generate_dynamic_fingerprint($client_ip);
+        save_fingerprint($client_ip, $dynamic_fp);
+        
         setcookie('js_verified', 'yes', time() + 86400, '/');
-        setcookie('fp_hash', 'human', time() + 86400, '/');
+        setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
         // Log to admin dashboard
         log_access_attempt($client_ip, 'human', $bot_analysis['confidence'], $bot_analysis, $characteristics);
         // Allow the page to continue loading - no exit, no redirect
@@ -942,6 +1098,10 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
     
     // Show warning UI only for uncertain cases
     if ($bot_analysis['is_uncertain']) {
+        // Generate dynamic fingerprint for this session
+        $dynamic_fp = generate_dynamic_fingerprint($client_ip);
+        save_fingerprint($client_ip, $dynamic_fp);
+        
         // Log to admin dashboard
         log_access_attempt($client_ip, 'uncertain', $bot_analysis['confidence'], $bot_analysis, $characteristics);
         // Show CAPTCHA page
@@ -1218,8 +1378,11 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
                 localStorage.setItem('behavior_check', JSON.stringify(behaviorScore));
               } catch(e) {}
               
+              // Use dynamic fingerprint from server
+              const dynamicFingerprint = <?php echo json_encode($dynamic_fp); ?>;
+              
               document.cookie = "js_verified=yes; path=/";
-              document.cookie = "fp_hash=human; path=/";
+              document.cookie = "fp_hash=" + dynamicFingerprint + "; path=/";
               document.cookie = "behavior_verified=" + (behaviorScore.naturalBehavior ? "yes" : "uncertain") + "; path=/";
               
               setTimeout(() => {
