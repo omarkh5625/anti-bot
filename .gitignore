@@ -1,0 +1,24 @@
+# Sensitive configuration files
+config.php
+
+# Log files and data
+logs/
+*.log
+fingerprints.json
+behavior_tracking.json
+blocked_ips.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak

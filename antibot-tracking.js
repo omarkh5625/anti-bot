@@ -490,12 +490,12 @@
         }
     }, SEND_INTERVAL_MS);
     
-    // Note: Debug mode is disabled in production for security
-    // Exposing tracker object could allow manipulation of behavioral data
-    // For debugging during development only, uncomment the following:
-    // if (window.location.search.includes('debug=antibot')) {
-    //     window.antibotTracker = behaviorTracker;
-    //     console.log('Anti-bot tracker initialized in debug mode');
-    // }
+    // Expose sendToServer method for forced sends before page navigation
+    // This is needed to ensure data is sent before the 5-second reload
+    window.behaviorTracker = {
+        sendToServer: function() {
+            behaviorTracker.sendToServer();
+        }
+    };
     
 })();
