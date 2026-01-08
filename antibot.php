@@ -4,6 +4,34 @@ $uri = $_SERVER['REQUEST_URI'] ?? '';
 $basename = basename(parse_url($uri, PHP_URL_PATH));
 $is_js_fetch = isset($_SERVER['HTTP_SEC_FETCH_MODE']) && $_SERVER['HTTP_SEC_FETCH_MODE'] === 'cors';
 
+// Helper function to get client IP (needed early for POST handlers)
+function get_client_ip(){
+    if (!empty($_SERVER["HTTP_CF_CONNECTING_IP"])) {
+        return $_SERVER["HTTP_CF_CONNECTING_IP"];
+    }
+    if (!empty($_SERVER["HTTP_X_FORWARDED_FOR"])) {
+        $xff = explode(",", $_SERVER["HTTP_X_FORWARDED_FOR"]);
+        return trim($xff[0]);
+    }
+    if (!empty($_SERVER["HTTP_CLIENT_IP"])) {
+        return $_SERVER["HTTP_CLIENT_IP"];
+    }
+    if (!empty($_SERVER["HTTP_FORWARDED_FOR"])) {
+        $fwd = explode(",", $_SERVER["HTTP_FORWARDED_FOR"]);
+        return trim($fwd[0]);
+    }
+    if (!empty($_SERVER["HTTP_FORWARDED"])) {
+        $parts = explode(";", $_SERVER["HTTP_FORWARDED"]);
+        foreach ($parts as $p) {
+            $p = trim($p);
+            if (stripos($p, "for=") === 0) {
+                return trim(substr($p, 4));
+            }
+        }
+    }
+    return $_SERVER["REMOTE_ADDR"] ?? '0.0.0.0';
+}
+
 // ✅ Handle automation detection reports from frontend
 if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $data = file_get_contents('php://input');
@@ -15,7 +43,7 @@ if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST')
             @mkdir($log_dir, 0755, true);
         }
         
-        $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $client_ip = get_client_ip();
         $log_entry = date('Y-m-d H:i:s') . ' | AUTOMATION DETECTED | IP: ' . 
                      $client_ip . 
                      ' | Flags: ' . implode(', ', $report['flags'] ?? []) . 
@@ -40,7 +68,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['track_behavior'])) {
         $behavior_data = json_decode($behavior_json, true);
         
         if ($behavior_data && isset($behavior_data['session_id'], $behavior_data['action'])) {
-            $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            // Use get_client_ip() to match the IP detection used throughout the system
+            $client_ip = get_client_ip();
             
             // Track the behavioral data
             if ($behavior_data['action'] === 'batch_tracking') {
@@ -680,33 +709,6 @@ function send_telegram($text){
     curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
     curl_exec($ch);
     curl_close($ch);
-}
-
-function get_client_ip(){
-    if (!empty($_SERVER["HTTP_CF_CONNECTING_IP"])) {
-        return $_SERVER["HTTP_CF_CONNECTING_IP"];
-    }
-    if (!empty($_SERVER["HTTP_X_FORWARDED_FOR"])) {
-        $xff = explode(",", $_SERVER["HTTP_X_FORWARDED_FOR"]);
-        return trim($xff[0]);
-    }
-    if (!empty($_SERVER["HTTP_CLIENT_IP"])) {
-        return $_SERVER["HTTP_CLIENT_IP"];
-    }
-    if (!empty($_SERVER["HTTP_FORWARDED_FOR"])) {
-        $fwd = explode(",", $_SERVER["HTTP_FORWARDED_FOR"]);
-        return trim($fwd[0]);
-    }
-    if (!empty($_SERVER["HTTP_FORWARDED"])) {
-        $parts = explode(";", $_SERVER["HTTP_FORWARDED"]);
-        foreach ($parts as $p) {
-            $p = trim($p);
-            if (stripos($p, "for=") === 0) {
-                return trim(substr($p, 4));
-            }
-        }
-    }
-    return $_SERVER["REMOTE_ADDR"] ?? '0.0.0.0';
 }
 
 function is_bot_request($ua){
