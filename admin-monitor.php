@@ -17,7 +17,10 @@ session_start();
 // ==================== CONFIGURATION ====================
 
 // Admin password (CHANGE THIS!)
-define('ADMIN_PASSWORD', 'admin123'); // ⚠️ Change this in production!
+// ⚠️ SECURITY WARNING: This default password is INSECURE!
+// ⚠️ You MUST change this to a strong password in production!
+// ⚠️ Consider using password_hash() and password_verify() for production use
+define('ADMIN_PASSWORD', 'admin123'); // Default: admin123 - CHANGE IMMEDIATELY!
 
 // File paths
 define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
@@ -29,7 +32,8 @@ define('LOG_DIR', __DIR__ . '/logs');
 
 // Handle login
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
-    if ($_POST['password'] === ADMIN_PASSWORD) {
+    // Use hash_equals() to prevent timing attacks
+    if (hash_equals(ADMIN_PASSWORD, $_POST['password'])) {
         $_SESSION['admin_logged_in'] = true;
         header('Location: ' . $_SERVER['PHP_SELF']);
         exit;
@@ -147,7 +151,10 @@ if (!is_dir(LOG_DIR)) {
 
 // Initialize access log if doesn't exist
 if (!file_exists(ACCESS_LOG)) {
-    file_put_contents(ACCESS_LOG, json_encode([]));
+    $result = @file_put_contents(ACCESS_LOG, json_encode([]));
+    if ($result === false) {
+        error_log('Anti-bot Admin: Failed to create access log file at ' . ACCESS_LOG);
+    }
 }
 
 /**
@@ -157,7 +164,11 @@ function load_access_logs() {
     if (!file_exists(ACCESS_LOG)) {
         return [];
     }
-    $data = file_get_contents(ACCESS_LOG);
+    $data = @file_get_contents(ACCESS_LOG);
+    if ($data === false) {
+        error_log('Anti-bot Admin: Failed to read access log file at ' . ACCESS_LOG);
+        return [];
+    }
     return json_decode($data, true) ?: [];
 }
 
@@ -168,7 +179,11 @@ function load_behavior_data() {
     if (!file_exists(BEHAVIOR_FILE)) {
         return [];
     }
-    $data = file_get_contents(BEHAVIOR_FILE);
+    $data = @file_get_contents(BEHAVIOR_FILE);
+    if ($data === false) {
+        error_log('Anti-bot Admin: Failed to read behavior file at ' . BEHAVIOR_FILE);
+        return [];
+    }
     return json_decode($data, true) ?: [];
 }
 
