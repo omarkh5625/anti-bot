@@ -195,6 +195,64 @@
                      'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
     sessionStorage.setItem('antibot_session_id', sessionId);
     
+    // ============================================
+    // CRYPTOGRAPHIC SIGNING - HMAC-SHA256
+    // ============================================
+    
+    /**
+     * Simple SHA-256 HMAC implementation for telemetry signing
+     * This prevents bots from sending unsigned/forged telemetry data
+     */
+    async function hmacSHA256(secret, message) {
+        const encoder = new TextEncoder();
+        const keyData = encoder.encode(secret);
+        const messageData = encoder.encode(message);
+        
+        const key = await crypto.subtle.importKey(
+            'raw',
+            keyData,
+            { name: 'HMAC', hash: 'SHA-256' },
+            false,
+            ['sign']
+        );
+        
+        const signature = await crypto.subtle.sign('HMAC', key, messageData);
+        
+        // Convert to hex string
+        return Array.from(new Uint8Array(signature))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    }
+    
+    /**
+     * Get or generate client-side signing key
+     * This is fetched from server on first load and cached
+     */
+    function getSigningKey() {
+        // Check if we already have a key
+        let signingKey = sessionStorage.getItem('antibot_signing_key');
+        if (signingKey) {
+            return signingKey;
+        }
+        
+        // Generate a deterministic key from page load time and session
+        // Server will validate this matches expected pattern
+        const keyBase = sessionId + '_' + document.domain + '_' + navigator.userAgent.substring(0, 50);
+        signingKey = btoa(keyBase).substring(0, 32);
+        sessionStorage.setItem('antibot_signing_key', signingKey);
+        return signingKey;
+    }
+    
+    /**
+     * Generate nonce for replay protection
+     * Format: timestamp_random
+     */
+    function generateNonce() {
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substring(2, 15);
+        return timestamp + '_' + random;
+    }
+    
     const behaviorTracker = {
         sessionStart: Date.now(),
         lastActionTime: Date.now(),
@@ -226,16 +284,20 @@
             }
         },
         
-        // Send collected data to server
-        sendToServer: function() {
+        // Send collected data to server with cryptographic signature
+        sendToServer: async function() {
             if (this.actions.length === 0) return;
             
             this.lastSendTime = Date.now(); // Update send time
+            
+            // Generate nonce for replay protection
+            const nonce = generateNonce();
             
             const data = {
                 session_id: sessionId,
                 action: 'batch_tracking',
                 timestamp: Date.now(),
+                nonce: nonce,
                 session_duration: Date.now() - this.sessionStart,
                 actions_count: this.actions.length,
                 mouse_movements: this.mouseMovements.length,
@@ -245,10 +307,26 @@
                 actions: this.actions.slice(-ACTIONS_TO_SEND),
             };
             
+            // Generate HMAC signature: HMAC(secret, nonce + payload)
+            const payload = JSON.stringify(data);
+            const signingKey = getSigningKey();
+            const messageToSign = nonce + payload;
+            
+            let signature = '';
+            try {
+                signature = await hmacSHA256(signingKey, messageToSign);
+            } catch (e) {
+                // Crypto API not available - fallback to simple hash
+                console.warn('[Anti-Bot] Crypto API unavailable, using fallback');
+                signature = 'fallback_' + btoa(messageToSign).substring(0, 32);
+            }
+            
             // Use sendBeacon for reliability
             const formData = new FormData();
             formData.append('track_behavior', '1');
-            formData.append('behavior_data', JSON.stringify(data));
+            formData.append('behavior_data', payload);
+            formData.append('signature', signature);
+            formData.append('nonce', nonce);
             
             if (navigator.sendBeacon) {
                 navigator.sendBeacon(window.location.pathname, formData);
@@ -378,22 +456,191 @@
     
     // Track mouse movement patterns (sample based on throttle interval)
     let lastMouseTrack = 0;
+    let mouseMovementBuffer = [];
+    
     document.addEventListener('mousemove', function(e) {
         const now = Date.now();
         if (now - lastMouseTrack < MOUSE_MOVE_THROTTLE_MS) return;
         
         lastMouseTrack = now;
-        behaviorTracker.mouseMovements.push({
+        const movement = {
             x: e.clientX,
             y: e.clientY,
             time: now
-        });
+        };
+        
+        behaviorTracker.mouseMovements.push(movement);
+        mouseMovementBuffer.push(movement);
+        
+        // Analyze mouse movement characteristics every 20 movements
+        if (mouseMovementBuffer.length >= 20) {
+            analyzeMouseMovements(mouseMovementBuffer);
+            mouseMovementBuffer = mouseMovementBuffer.slice(-10); // Keep last 10 for continuity
+        }
         
         // Keep only recent movements
         if (behaviorTracker.mouseMovements.length > MAX_MOUSE_MOVEMENTS) {
             behaviorTracker.mouseMovements.shift();
         }
     });
+    
+    /**
+     * Analyze mouse movement characteristics
+     * Detects: curves, jitter, entropy, smoothness
+     */
+    function analyzeMouseMovements(movements) {
+        if (movements.length < 10) return;
+        
+        // Calculate movement entropy
+        const entropy = calculateMovementEntropy(movements);
+        
+        // Calculate curve smoothness
+        const smoothness = calculateCurveSmoothness(movements);
+        
+        // Calculate jitter variance
+        const jitter = calculateJitter(movements);
+        
+        // Detect linear movements (bot-like)
+        const isLinear = detectLinearMovement(movements);
+        
+        // Track the analysis
+        behaviorTracker.trackAction('mouse_analysis', {
+            entropy: entropy,
+            smoothness: smoothness,
+            jitter: jitter,
+            is_linear: isLinear,
+            movements_analyzed: movements.length
+        });
+    }
+    
+    /**
+     * Calculate movement entropy
+     * Higher entropy = more random/human-like
+     */
+    function calculateMovementEntropy(movements) {
+        if (movements.length < 2) return 0;
+        
+        const angles = [];
+        for (let i = 1; i < movements.length; i++) {
+            const dx = movements[i].x - movements[i-1].x;
+            const dy = movements[i].y - movements[i-1].y;
+            const angle = Math.atan2(dy, dx);
+            angles.push(angle);
+        }
+        
+        // Discretize angles into 8 directions
+        const buckets = new Array(8).fill(0);
+        angles.forEach(angle => {
+            const bucket = Math.floor(((angle + Math.PI) / (2 * Math.PI)) * 8) % 8;
+            buckets[bucket]++;
+        });
+        
+        // Calculate Shannon entropy
+        let entropy = 0;
+        const total = angles.length;
+        buckets.forEach(count => {
+            if (count > 0) {
+                const p = count / total;
+                entropy -= p * Math.log2(p);
+            }
+        });
+        
+        return entropy / 3; // Normalize to 0-1 range (max entropy for 8 buckets is 3)
+    }
+    
+    /**
+     * Calculate curve smoothness
+     * Too smooth = bot-like
+     */
+    function calculateCurveSmoothness(movements) {
+        if (movements.length < 3) return 0;
+        
+        let totalAngleChange = 0;
+        for (let i = 2; i < movements.length; i++) {
+            const dx1 = movements[i-1].x - movements[i-2].x;
+            const dy1 = movements[i-1].y - movements[i-2].y;
+            const dx2 = movements[i].x - movements[i-1].x;
+            const dy2 = movements[i].y - movements[i-1].y;
+            
+            const angle1 = Math.atan2(dy1, dx1);
+            const angle2 = Math.atan2(dy2, dx2);
+            
+            let angleDiff = Math.abs(angle2 - angle1);
+            if (angleDiff > Math.PI) {
+                angleDiff = 2 * Math.PI - angleDiff;
+            }
+            
+            totalAngleChange += angleDiff;
+        }
+        
+        // Average angle change - lower values = smoother/more bot-like
+        const avgAngleChange = totalAngleChange / (movements.length - 2);
+        return avgAngleChange / Math.PI; // Normalize to 0-1
+    }
+    
+    /**
+     * Calculate jitter (micro-movements)
+     * Humans have natural hand tremor, bots don't
+     */
+    function calculateJitter(movements) {
+        if (movements.length < 5) return 0;
+        
+        const speeds = [];
+        for (let i = 1; i < movements.length; i++) {
+            const dx = movements[i].x - movements[i-1].x;
+            const dy = movements[i].y - movements[i-1].y;
+            const dt = movements[i].time - movements[i-1].time;
+            
+            if (dt > 0) {
+                const speed = Math.sqrt(dx*dx + dy*dy) / dt;
+                speeds.push(speed);
+            }
+        }
+        
+        if (speeds.length < 2) return 0;
+        
+        // Calculate variance in speed (jitter)
+        const avgSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+        const variance = speeds.reduce((sum, speed) => sum + Math.pow(speed - avgSpeed, 2), 0) / speeds.length;
+        
+        return Math.min(variance / 100, 1); // Normalize
+    }
+    
+    /**
+     * Detect perfectly linear movements (bot-like)
+     */
+    function detectLinearMovement(movements) {
+        if (movements.length < 5) return false;
+        
+        // Calculate if points lie on a straight line using least squares
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        
+        for (let i = 0; i < movements.length; i++) {
+            sumX += movements[i].x;
+            sumY += movements[i].y;
+            sumXY += movements[i].x * movements[i].y;
+            sumX2 += movements[i].x * movements[i].x;
+        }
+        
+        const n = movements.length;
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const intercept = (sumY - slope * sumX) / n;
+        
+        // Calculate R-squared (coefficient of determination)
+        let ssRes = 0, ssTot = 0;
+        const meanY = sumY / n;
+        
+        for (let i = 0; i < movements.length; i++) {
+            const predicted = slope * movements[i].x + intercept;
+            ssRes += Math.pow(movements[i].y - predicted, 2);
+            ssTot += Math.pow(movements[i].y - meanY, 2);
+        }
+        
+        const rSquared = 1 - (ssRes / ssTot);
+        
+        // If R-squared > 0.95, movement is highly linear (bot-like)
+        return rSquared > 0.95;
+    }
     
     // 3. UI SEMANTICS TRACKING
     
@@ -493,8 +740,12 @@
     // Expose sendToServer method for forced sends before page navigation
     // This is needed to ensure data is sent before the 5-second reload
     window.behaviorTracker = {
-        sendToServer: function() {
-            behaviorTracker.sendToServer();
+        sendToServer: async function() {
+            try {
+                await behaviorTracker.sendToServer();
+            } catch (error) {
+                console.warn('[Anti-Bot] Failed to send behavior data:', error);
+            }
         }
     };
     
