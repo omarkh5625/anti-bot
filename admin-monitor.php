@@ -12,10 +12,46 @@
  * Security: Password protected admin panel
  */
 
-// Enable error display for debugging
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-ini_set('log_errors', 1);
+// CRITICAL: Enable ALL error reporting at the very first line
+@ini_set('display_errors', '1');
+@ini_set('display_startup_errors', '1');
+@error_reporting(E_ALL);
+@ini_set('log_errors', '1');
+
+// Set a custom error handler to catch everything
+set_error_handler(function($errno, $errstr, $errfile, $errline) {
+    echo "<div style='background: #f44336; color: white; padding: 20px; margin: 10px; border-radius: 5px;'>";
+    echo "<h3>PHP Error Detected:</h3>";
+    echo "<p><strong>Error:</strong> " . htmlspecialchars($errstr) . "</p>";
+    echo "<p><strong>File:</strong> " . htmlspecialchars($errfile) . "</p>";
+    echo "<p><strong>Line:</strong> " . $errline . "</p>";
+    echo "</div>";
+    return true;
+});
+
+// Set exception handler
+set_exception_handler(function($e) {
+    echo "<div style='background: #f44336; color: white; padding: 20px; margin: 10px; border-radius: 5px;'>";
+    echo "<h3>PHP Exception:</h3>";
+    echo "<p><strong>Message:</strong> " . htmlspecialchars($e->getMessage()) . "</p>";
+    echo "<p><strong>File:</strong> " . htmlspecialchars($e->getFile()) . "</p>";
+    echo "<p><strong>Line:</strong> " . $e->getLine() . "</p>";
+    echo "<p><strong>Trace:</strong><pre>" . htmlspecialchars($e->getTraceAsString()) . "</pre></p>";
+    echo "</div>";
+});
+
+// Catch fatal errors
+register_shutdown_function(function() {
+    $error = error_get_last();
+    if ($error !== null && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        echo "<div style='background: #f44336; color: white; padding: 20px; margin: 10px; border-radius: 5px;'>";
+        echo "<h3>Fatal PHP Error:</h3>";
+        echo "<p><strong>Error:</strong> " . htmlspecialchars($error['message']) . "</p>";
+        echo "<p><strong>File:</strong> " . htmlspecialchars($error['file']) . "</p>";
+        echo "<p><strong>Line:</strong> " . $error['line'] . "</p>";
+        echo "</div>";
+    }
+});
 
 // Start session with error handling
 if (session_status() === PHP_SESSION_NONE) {
