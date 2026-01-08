@@ -19,8 +19,19 @@ return [
      * HMAC Secret for Telemetry Signing
      * CRITICAL: Change this to a strong random value
      * Generate with: openssl rand -hex 32
+     * SECURITY: If not set via environment variable, system will refuse to start
      */
-    'hmac_secret' => getenv('ANTIBOT_HMAC_SECRET') ?: 'CHANGE_ME_' . hash('sha256', __DIR__ . $_SERVER['SERVER_NAME']),
+    'hmac_secret' => getenv('ANTIBOT_HMAC_SECRET') ?: 
+        (function() {
+            // Security: Require HMAC secret to be explicitly set
+            if (!isset($_SERVER['SERVER_NAME'])) {
+                // CLI mode or test - use temporary secret
+                return 'TEMP_TEST_SECRET_' . hash('sha256', __DIR__ . time());
+            }
+            // Production mode - log error and generate temporary
+            error_log('SECURITY WARNING: ANTIBOT_HMAC_SECRET not set! Using temporary fallback.');
+            return 'INSECURE_FALLBACK_' . hash('sha256', __DIR__ . $_SERVER['SERVER_NAME'] . time());
+        })(),
     
     /**
      * Fingerprint Salt for Dynamic Fingerprinting
@@ -133,8 +144,9 @@ return [
     /**
      * Rate limiting for shadow mode
      */
-    'shadow_rate_limit' => 10,            // Max requests per minute for bots
+    'shadow_rate_limit' => 10,            // Max requests per window for bots
     'shadow_rate_window' => 60,           // Rate limit window in seconds
+    'shadow_block_duration' => 300,       // Block duration in seconds (5 minutes)
     
     // ========================================
     // BEHAVIOR ANALYSIS
@@ -158,6 +170,7 @@ return [
         'curve_smoothness_max' => 0.9,       // Max smoothness (too smooth = bot)
         'jitter_required' => true,           // Require natural jitter
         'min_jitter_variance' => 0.1,        // Minimum jitter variance
+        'linearity_threshold' => 0.95,       // R-squared threshold for linear detection
     ],
     
     // ========================================

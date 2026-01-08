@@ -741,7 +741,11 @@
     // This is needed to ensure data is sent before the 5-second reload
     window.behaviorTracker = {
         sendToServer: async function() {
-            await behaviorTracker.sendToServer();
+            try {
+                await behaviorTracker.sendToServer();
+            } catch (error) {
+                console.warn('[Anti-Bot] Failed to send behavior data:', error);
+            }
         }
     };
     

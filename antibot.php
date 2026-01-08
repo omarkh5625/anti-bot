@@ -1149,7 +1149,7 @@ function calculate_bot_confidence($ip) {
     // DYNAMIC THRESHOLDS WITH RANDOMIZATION
     // ============================================
     
-    // Randomize thresholds to prevent reverse engineering
+    // Randomize thresholds once at start to prevent reverse engineering
     $human_threshold = mt_rand(
         $config['threshold_human_min'] ?? 15,
         $config['threshold_human_max'] ?? 25
@@ -1214,7 +1214,13 @@ function calculate_bot_confidence($ip) {
  * Track shadow rate limiting per IP
  */
 function check_shadow_rate_limit($ip) {
+    global $config;
     static $rate_limits = [];
+    
+    // Get rate limit settings from config
+    $max_requests = $config['shadow_rate_limit'] ?? 10;
+    $window_seconds = $config['shadow_rate_window'] ?? 60;
+    $block_duration = $config['shadow_block_duration'] ?? 300; // 5 minutes default
     
     if (!isset($rate_limits[$ip])) {
         $rate_limits[$ip] = [
@@ -1230,19 +1236,21 @@ function check_shadow_rate_limit($ip) {
         return false; // Rate limited
     }
     
-    // Clean old requests (older than 60 seconds)
+    // Clean old requests (older than window)
     $rate_limits[$ip]['requests'] = array_filter(
         $rate_limits[$ip]['requests'],
-        function($timestamp) use ($now) { return ($now - $timestamp) < 60; }
+        function($timestamp) use ($now, $window_seconds) { 
+            return ($now - $timestamp) < $window_seconds; 
+        }
     );
     
     // Add current request
     $rate_limits[$ip]['requests'][] = $now;
     
-    // Check if exceeded limit (10 requests per minute for bots)
-    if (count($rate_limits[$ip]['requests']) > 10) {
-        // Block for 5 minutes
-        $rate_limits[$ip]['blocked_until'] = $now + 300;
+    // Check if exceeded limit
+    if (count($rate_limits[$ip]['requests']) > $max_requests) {
+        // Block for configured duration
+        $rate_limits[$ip]['blocked_until'] = $now + $block_duration;
         return false;
     }
     
@@ -1273,9 +1281,10 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
     // Silent rate limiting
     if ($tactics['silent_rate_limit'] ?? false) {
         if (!check_shadow_rate_limit($ip)) {
-            // Silently slow down the bot with artificial delay
-            $delay = rand(5, 15); // 5-15 seconds
-            sleep($delay);
+            // Silently slow down the bot with artificial delay (non-blocking)
+            // Use usleep instead of sleep to avoid blocking for too long
+            $delay_ms = rand(2000, 5000); // 2-5 seconds in milliseconds
+            usleep($delay_ms * 1000); // Convert to microseconds
             // Still continue to show fake success
         }
     }
