@@ -311,8 +311,8 @@ function calculate_bot_confidence($ip) {
     return [
         'confidence' => $total_score,
         'is_confident_human' => $total_score < 20,
-        'is_uncertain' => $total_score >= 20 && $total_score < 60,
-        'is_likely_bot' => $total_score >= 60,
+        'is_uncertain' => $total_score >= 20 && $total_score < 57,
+        'is_likely_bot' => $total_score >= 57,
         'reasons' => $all_reasons,
         'domain_scores' => [
             'temporal' => $temporal['score'],
