@@ -15,6 +15,11 @@ if (
 define('FP_FILE', __DIR__ . '/fingerprints.json');
 define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
 
+// Ensure logs directory exists
+if (!is_dir(__DIR__ . '/logs')) {
+    @mkdir(__DIR__ . '/logs', 0755, true);
+}
+
 file_put_contents('logs/blocked.txt', $_SERVER['REMOTE_ADDR']." | ".$_SERVER['HTTP_USER_AGENT']."\n", FILE_APPEND);
 
 // دوال fingerprint

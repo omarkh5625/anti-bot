@@ -11,6 +11,10 @@ logs/
 *.log
 blocked.txt
 
+# Test files
+test_antibot.php
+test_*.json
+
 # PHP
 vendor/
 composer.lock
