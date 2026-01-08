@@ -232,16 +232,18 @@ function load_access_logs() {
 /**
  * Load behavior tracking data
  */
-function load_behavior_data() {
-    if (!file_exists(BEHAVIOR_FILE)) {
-        return [];
+if (!function_exists('load_behavior_data')) {
+    function load_behavior_data() {
+        if (!file_exists(BEHAVIOR_FILE)) {
+            return [];
+        }
+        $data = @file_get_contents(BEHAVIOR_FILE);
+        if ($data === false) {
+            error_log('Anti-bot Admin: Failed to read behavior file at ' . BEHAVIOR_FILE);
+            return [];
+        }
+        return json_decode($data, true) ?: [];
     }
-    $data = @file_get_contents(BEHAVIOR_FILE);
-    if ($data === false) {
-        error_log('Anti-bot Admin: Failed to read behavior file at ' . BEHAVIOR_FILE);
-        return [];
-    }
-    return json_decode($data, true) ?: [];
 }
 
 /**
