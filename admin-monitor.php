@@ -12,7 +12,18 @@
  * Security: Password protected admin panel
  */
 
-session_start();
+// Enable error reporting for debugging (disable in production after fixing issues)
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Start session with error handling
+try {
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+} catch (Exception $e) {
+    die('Session Error: Unable to start session. Please check PHP session configuration.');
+}
 
 // ==================== CONFIGURATION ====================
 
@@ -144,9 +155,31 @@ if (!isset($_SESSION['admin_logged_in']) || !$_SESSION['admin_logged_in']) {
 
 // ==================== DATA LOADING FUNCTIONS ====================
 
-// Ensure logs directory exists
+// Ensure logs directory exists with proper error handling
 if (!is_dir(LOG_DIR)) {
-    @mkdir(LOG_DIR, 0755, true);
+    $created = @mkdir(LOG_DIR, 0755, true);
+    if (!$created && !is_dir(LOG_DIR)) {
+        // Try to provide helpful error message
+        $parent_dir = dirname(LOG_DIR);
+        $parent_writable = is_writable($parent_dir);
+        die('<div style="background: #fee; color: #c33; padding: 20px; margin: 20px; border-radius: 10px; font-family: monospace;">' .
+            '<h2>Directory Creation Error</h2>' .
+            '<p><strong>Failed to create logs directory:</strong> ' . htmlspecialchars(LOG_DIR) . '</p>' .
+            '<p><strong>Parent directory:</strong> ' . htmlspecialchars($parent_dir) . '</p>' .
+            '<p><strong>Parent writable:</strong> ' . ($parent_writable ? 'Yes' : 'No') . '</p>' .
+            '<p><strong>Solution:</strong> Create the directory manually with: <code>mkdir -p ' . htmlspecialchars(LOG_DIR) . ' && chmod 755 ' . htmlspecialchars(LOG_DIR) . '</code></p>' .
+            '</div>');
+    }
+}
+
+// Verify logs directory is writable
+if (!is_writable(LOG_DIR)) {
+    die('<div style="background: #fee; color: #c33; padding: 20px; margin: 20px; border-radius: 10px; font-family: monospace;">' .
+        '<h2>Permission Error</h2>' .
+        '<p><strong>Logs directory is not writable:</strong> ' . htmlspecialchars(LOG_DIR) . '</p>' .
+        '<p><strong>Current permissions:</strong> ' . substr(sprintf('%o', fileperms(LOG_DIR)), -4) . '</p>' .
+        '<p><strong>Solution:</strong> Make directory writable with: <code>chmod 755 ' . htmlspecialchars(LOG_DIR) . '</code></p>' .
+        '</div>');
 }
 
 // Initialize access log if doesn't exist
@@ -154,6 +187,13 @@ if (!file_exists(ACCESS_LOG)) {
     $result = @file_put_contents(ACCESS_LOG, json_encode([]));
     if ($result === false) {
         error_log('Anti-bot Admin: Failed to create access log file at ' . ACCESS_LOG);
+        die('<div style="background: #fee; color: #c33; padding: 20px; margin: 20px; border-radius: 10px; font-family: monospace;">' .
+            '<h2>File Creation Error</h2>' .
+            '<p><strong>Failed to create access log file:</strong> ' . htmlspecialchars(ACCESS_LOG) . '</p>' .
+            '<p><strong>Directory exists:</strong> ' . (is_dir(LOG_DIR) ? 'Yes' : 'No') . '</p>' .
+            '<p><strong>Directory writable:</strong> ' . (is_writable(LOG_DIR) ? 'Yes' : 'No') . '</p>' .
+            '<p><strong>Solution:</strong> Create the file manually with: <code>touch ' . htmlspecialchars(ACCESS_LOG) . ' && chmod 644 ' . htmlspecialchars(ACCESS_LOG) . '</code></p>' .
+            '</div>');
     }
 }
 
