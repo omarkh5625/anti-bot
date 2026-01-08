@@ -1,0 +1,32 @@
+# Configuration files with sensitive data
+config.php
+
+# Behavioral tracking data
+behavior_tracking.json
+fingerprints.json
+blocked_ips.json
+
+# Logs
+logs/
+*.log
+blocked.txt
+
+# PHP
+vendor/
+composer.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp

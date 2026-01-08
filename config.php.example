@@ -1,0 +1,29 @@
+<?php
+/**
+ * Anti-Bot Configuration File
+ * 
+ * Configure your API keys and security settings here
+ */
+
+return [
+    // Logging
+    'log_file' => __DIR__ . '/logs/antibot.log',
+    
+    // IP Reputation Thresholds
+    'blacklist_threshold' => 2,  // Number of blacklist hits before blocking
+    'proxycheck_risk_threshold' => 75,  // Risk score threshold (0-100)
+    
+    // Neutrino API (for IP reputation checks)
+    // Get your API key at: https://www.neutrinoapi.com/
+    'user_id' => '',  // Your Neutrino user ID
+    'api_key' => '',  // Your Neutrino API key
+    
+    // ProxyCheck.io API (for VPN/Proxy detection)
+    // Get your API key at: https://proxycheck.io/
+    'proxycheck_key' => '',  // Your ProxyCheck API key
+    
+    // Telegram Notifications (optional)
+    // Create a bot with @BotFather on Telegram
+    'tg_bot_token' => '',  // Your Telegram bot token
+    'tg_chat_id' => '',    // Your Telegram chat ID
+];

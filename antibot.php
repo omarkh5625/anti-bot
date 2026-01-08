@@ -13,6 +13,7 @@ if (
 }
 
 define('FP_FILE', __DIR__ . '/fingerprints.json');
+define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
 
 file_put_contents('logs/blocked.txt', $_SERVER['REMOTE_ADDR']." | ".$_SERVER['HTTP_USER_AGENT']."\n", FILE_APPEND);
 
@@ -31,6 +32,272 @@ function save_fingerprint($ip, $hash) {
 function get_fingerprint_for_ip($ip) {
     $fps = load_fingerprints();
     return $fps[$ip] ?? null;
+}
+
+// Behavioral tracking functions
+function load_behavior_data() {
+    if (!file_exists(BEHAVIOR_FILE)) {
+        file_put_contents(BEHAVIOR_FILE, json_encode([], JSON_PRETTY_PRINT));
+    }
+    return json_decode(file_get_contents(BEHAVIOR_FILE), true) ?: [];
+}
+
+function save_behavior_data($data) {
+    file_put_contents(BEHAVIOR_FILE, json_encode($data, JSON_PRETTY_PRINT));
+}
+
+function track_temporal_behavior($ip, $action, $timestamp, $data = []) {
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip])) {
+        $behaviors[$ip] = ['sessions' => [], 'first_seen' => time()];
+    }
+    
+    $session_id = $_COOKIE['session_id'] ?? session_id();
+    if (!isset($behaviors[$ip]['sessions'][$session_id])) {
+        $behaviors[$ip]['sessions'][$session_id] = ['actions' => [], 'start_time' => time()];
+    }
+    
+    $behaviors[$ip]['sessions'][$session_id]['actions'][] = [
+        'action' => $action,
+        'timestamp' => $timestamp,
+        'data' => $data
+    ];
+    
+    save_behavior_data($behaviors);
+    return $behaviors[$ip];
+}
+
+function analyze_temporal_patterns($ip) {
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    
+    foreach ($behaviors[$ip]['sessions'] as $session_id => $session) {
+        if (empty($session['actions']) || count($session['actions']) < 3) {
+            continue;
+        }
+        
+        $timings = [];
+        for ($i = 1; $i < count($session['actions']); $i++) {
+            $diff = $session['actions'][$i]['timestamp'] - $session['actions'][$i-1]['timestamp'];
+            $timings[] = $diff;
+        }
+        
+        // Check for mathematically equal timings
+        $timing_variance = count(array_unique($timings)) / max(count($timings), 1);
+        if ($timing_variance < 0.5 && count($timings) >= 3) {
+            $score += 30;
+            $reasons[] = 'Equal click timings detected';
+        }
+        
+        // Check for absence of hesitation (all actions too fast)
+        $avg_timing = array_sum($timings) / max(count($timings), 1);
+        if ($avg_timing < 100) { // Less than 100ms average
+            $score += 25;
+            $reasons[] = 'No hesitation or natural pauses';
+        }
+        
+        // Check for constant reading times
+        $reading_actions = array_filter($session['actions'], function($a) {
+            return isset($a['data']['text_length']);
+        });
+        if (count($reading_actions) >= 2) {
+            $read_times = [];
+            foreach ($reading_actions as $action) {
+                if (isset($action['data']['read_time'])) {
+                    $read_times[] = $action['data']['read_time'];
+                }
+            }
+            if (count($read_times) >= 2 && count(array_unique($read_times)) === 1) {
+                $score += 20;
+                $reasons[] = 'Constant reading times regardless of content';
+            }
+        }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+function analyze_interaction_noise($ip) {
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    $total_actions = 0;
+    $error_count = 0;
+    $canceled_count = 0;
+    $efficient_count = 0;
+    
+    foreach ($behaviors[$ip]['sessions'] as $session) {
+        foreach ($session['actions'] as $action) {
+            $total_actions++;
+            
+            if (isset($action['data']['input_error']) && $action['data']['input_error']) {
+                $error_count++;
+            }
+            if (isset($action['data']['canceled']) && $action['data']['canceled']) {
+                $canceled_count++;
+            }
+            if (isset($action['data']['skipped_visual_hints']) && $action['data']['skipped_visual_hints']) {
+                $efficient_count++;
+            }
+        }
+    }
+    
+    // Human users make minor errors
+    if ($total_actions > 10 && $error_count === 0 && $canceled_count === 0) {
+        $score += 40;
+        $reasons[] = 'No interaction noise (errors/cancellations)';
+    }
+    
+    // Over-efficient interaction
+    if ($total_actions > 5 && $efficient_count / $total_actions > 0.8) {
+        $score += 35;
+        $reasons[] = 'Overly efficient, ignoring visual hints';
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+function analyze_ui_semantics($ip) {
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    
+    foreach ($behaviors[$ip]['sessions'] as $session) {
+        $ignores_cosmetic = 0;
+        $total_interactions = 0;
+        
+        foreach ($session['actions'] as $action) {
+            if (isset($action['data']['element_type'])) {
+                $total_interactions++;
+                if (isset($action['data']['ignores_cosmetic']) && $action['data']['ignores_cosmetic']) {
+                    $ignores_cosmetic++;
+                }
+            }
+        }
+        
+        if ($total_interactions > 0 && $ignores_cosmetic / $total_interactions > 0.9) {
+            $score += 45;
+            $reasons[] = 'Ignores cosmetic/decorative elements';
+        }
+        
+        // Check for robotic patterns unaffected by visual rearrangement
+        if (isset($session['actions'][0]['data']['visual_order_changed'])) {
+            $unchanged_pattern = true;
+            for ($i = 1; $i < count($session['actions']); $i++) {
+                if (isset($session['actions'][$i]['data']['adapted_to_order'])) {
+                    $unchanged_pattern = false;
+                    break;
+                }
+            }
+            if ($unchanged_pattern && count($session['actions']) > 3) {
+                $score += 40;
+                $reasons[] = 'Robotic pattern, unaffected by visual changes';
+            }
+        }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+function analyze_session_continuity($ip) {
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    $sessions = $behaviors[$ip]['sessions'];
+    
+    if (count($sessions) < 2) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $navigation_patterns = [];
+    foreach ($sessions as $session) {
+        $nav_sequence = [];
+        foreach ($session['actions'] as $action) {
+            if ($action['action'] === 'navigate' && isset($action['data']['path'])) {
+                $nav_sequence[] = $action['data']['path'];
+            }
+        }
+        if (!empty($nav_sequence)) {
+            $navigation_patterns[] = implode('>', $nav_sequence);
+        }
+    }
+    
+    // Check for repeated identical navigation without natural variation
+    if (count($navigation_patterns) >= 2) {
+        $unique_patterns = count(array_unique($navigation_patterns));
+        if ($unique_patterns / count($navigation_patterns) < 0.3) {
+            $score += 50;
+            $reasons[] = 'Repeated identical navigation patterns';
+        }
+    }
+    
+    // Check for missing ordinary resume logic
+    $session_times = array_column($sessions, 'start_time');
+    sort($session_times);
+    for ($i = 1; $i < count($session_times); $i++) {
+        $gap = $session_times[$i] - $session_times[$i-1];
+        // If sessions are suspiciously close (less than 5 seconds apart)
+        if ($gap < 5) {
+            $score += 30;
+            $reasons[] = 'Suspicious session timing, missing resume logic';
+            break;
+        }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+function calculate_bot_confidence($ip) {
+    $temporal = analyze_temporal_patterns($ip);
+    $noise = analyze_interaction_noise($ip);
+    $semantics = analyze_ui_semantics($ip);
+    $continuity = analyze_session_continuity($ip);
+    
+    // Weighted average of all detection domains
+    $total_score = (
+        $temporal['score'] * 0.3 +
+        $noise['score'] * 0.25 +
+        $semantics['score'] * 0.25 +
+        $continuity['score'] * 0.2
+    );
+    
+    $all_reasons = array_merge(
+        $temporal['reasons'],
+        $noise['reasons'],
+        $semantics['reasons'],
+        $continuity['reasons']
+    );
+    
+    return [
+        'confidence' => $total_score,
+        'is_confident_human' => $total_score < 20,
+        'is_uncertain' => $total_score >= 20 && $total_score < 60,
+        'is_likely_bot' => $total_score >= 60,
+        'reasons' => $all_reasons,
+        'domain_scores' => [
+            'temporal' => $temporal['score'],
+            'noise' => $noise['score'],
+            'semantics' => $semantics['score'],
+            'continuity' => $continuity['score']
+        ]
+    ];
 }
 $config = require __DIR__ . '/config.php';
 
@@ -338,9 +605,34 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 
 // -------------------------------------------------
 // CAPTCHA واجهة التحقق Cloudflare-style checkbox كبيرة على الهاتف
+// Enhanced with behavioral analysis for better bot detection
 // -------------------------------------------------
 
-if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
+// Calculate bot confidence before showing CAPTCHA
+$bot_analysis = calculate_bot_confidence($client_ip);
+$show_warning_ui = false;
+
+// Seamless access for confident humans
+if ($bot_analysis['is_confident_human']) {
+    // Set cookies to bypass CAPTCHA for confident humans
+    if (!isset($_COOKIE['js_verified'])) {
+        setcookie('js_verified', 'yes', time() + 86400, '/');
+        setcookie('fp_hash', 'human', time() + 86400, '/');
+    }
+}
+
+// Show warning UI only for uncertain cases
+if ($bot_analysis['is_uncertain']) {
+    $show_warning_ui = true;
+}
+
+// Block likely bots immediately
+if ($bot_analysis['is_likely_bot']) {
+    $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
+    block_and_exit($client_ip, $user_agent, $reason);
+}
+
+if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash']) && $show_warning_ui) {
     // احفظ الرابط الأصلي في localStorage من السيرفر للواجهة JS
     echo '<script>try { localStorage.setItem("antibot_redirect", ' . json_encode($_SERVER['REQUEST_URI']) . '); }catch(e){}</script>';
 ?>
@@ -541,6 +833,53 @@ if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
 
     setSite("Chase.com", "https://www.chase.com/etc/designs/chase-ux/favicon.ico");
 
+    // Behavioral tracking for anti-bot detection
+    const behaviorData = {
+      clicks: [],
+      mouseMovements: [],
+      keyPresses: [],
+      startTime: Date.now(),
+      errors: 0,
+      hesitations: 0
+    };
+
+    // Track mouse movements for natural behavior
+    let lastMouseMove = Date.now();
+    document.addEventListener('mousemove', (e) => {
+      const now = Date.now();
+      const timeSinceLastMove = now - lastMouseMove;
+      behaviorData.mouseMovements.push({
+        x: e.clientX,
+        y: e.clientY,
+        time: now,
+        gap: timeSinceLastMove
+      });
+      lastMouseMove = now;
+      
+      // Keep only last 50 movements to avoid memory issues
+      if (behaviorData.mouseMovements.length > 50) {
+        behaviorData.mouseMovements.shift();
+      }
+    });
+
+    // Track clicks with timing
+    document.addEventListener('click', (e) => {
+      behaviorData.clicks.push({
+        x: e.clientX,
+        y: e.clientY,
+        time: Date.now(),
+        target: e.target.tagName
+      });
+    });
+
+    // Track keyboard interactions
+    document.addEventListener('keydown', (e) => {
+      behaviorData.keyPresses.push({
+        key: e.key,
+        time: Date.now()
+      });
+    });
+
     const check = document.getElementById('cfCheck');
     const vState = document.getElementById('stateVerifying');
     const sState = document.getElementById('stateSuccess');
@@ -552,9 +891,32 @@ if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
         sState.classList.remove('active');
         return;
       }
+      
+      // Calculate behavioral metrics
+      const totalTime = Date.now() - behaviorData.startTime;
+      const hasNaturalMovement = behaviorData.mouseMovements.length > 10;
+      const hasVariedTiming = behaviorData.mouseMovements.some(m => m.gap > 50);
+      const notTooFast = totalTime > 1000; // At least 1 second before clicking
+      
       vState.classList.add('active');
+      
+      // Send behavioral data to server
+      const behaviorScore = {
+        totalTime,
+        mouseMovements: behaviorData.mouseMovements.length,
+        clicks: behaviorData.clicks.length,
+        naturalBehavior: hasNaturalMovement && hasVariedTiming && notTooFast
+      };
+      
+      // Store in localStorage for potential server-side verification
+      try {
+        localStorage.setItem('behavior_check', JSON.stringify(behaviorScore));
+      } catch(e) {}
+      
       document.cookie = "js_verified=yes; path=/";
       document.cookie = "fp_hash=human; path=/";
+      document.cookie = "behavior_verified=" + (behaviorScore.naturalBehavior ? "yes" : "uncertain") + "; path=/";
+      
       setTimeout(() => {
         vState.classList.remove('active');
         sState.classList.add('active');
@@ -566,3 +928,24 @@ if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
 </html>
 
 <?php exit; } ?>
+
+<?php
+// API endpoint for tracking behavioral data during normal browsing
+if (isset($_POST['track_behavior']) && isset($_POST['behavior_data'])) {
+    header('Content-Type: application/json');
+    
+    $behavior_data = json_decode($_POST['behavior_data'], true);
+    if ($behavior_data && is_array($behavior_data)) {
+        $client_ip = get_client_ip();
+        $action = $behavior_data['action'] ?? 'unknown';
+        $timestamp = $behavior_data['timestamp'] ?? time();
+        
+        track_temporal_behavior($client_ip, $action, $timestamp, $behavior_data);
+        
+        echo json_encode(['status' => 'success', 'tracked' => true]);
+    } else {
+        echo json_encode(['status' => 'error', 'message' => 'Invalid data']);
+    }
+    exit;
+}
+?>
