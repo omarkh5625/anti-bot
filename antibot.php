@@ -1069,18 +1069,17 @@ if ($is_first_visit) {
           localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
         } catch(e) {}
         
-        // Force send behavioral data before page reload (at 4.5 seconds)
-        setTimeout(function() {
+        // Force send behavioral data and wait for completion before reload
+        setTimeout(async function() {
           if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
+            // Send data and wait a bit for it to complete
             window.behaviorTracker.sendToServer();
+            // Wait 500ms for sendBeacon to complete
+            await new Promise(resolve => setTimeout(resolve, 600));
           }
-        }, 4500);
-        
-        // After 5 seconds, navigate to same URL to trigger analysis
-        setTimeout(function() {
-          // Use href instead of reload to avoid POST resubmission warnings
+          // After data is sent, navigate to same URL to trigger analysis
           window.location.href = window.location.href;
-        }, 5000);
+        }, 4400);
       </script>
     </body>
     </html>
