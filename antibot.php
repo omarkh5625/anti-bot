@@ -824,6 +824,191 @@ function analyze_ui_semantics($ip) {
     return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
 }
 
+/**
+ * Analyze mouse movement characteristics for bot detection
+ * Examines entropy, smoothness, jitter, and linear patterns
+ */
+function analyze_mouse_movements($ip) {
+    global $config;
+    
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    $mouse_config = $config['mouse_analysis'] ?? [];
+    
+    // Analyze mouse_analysis actions from JavaScript tracking
+    foreach ($behaviors[$ip]['sessions'] as $session) {
+        foreach ($session['actions'] as $action) {
+            if ($action['action'] === 'mouse_analysis' && isset($action['data'])) {
+                $data = $action['data'];
+                
+                // Check entropy (should be > 0.3 for humans)
+                if (isset($data['entropy'])) {
+                    $min_entropy = $mouse_config['min_entropy'] ?? 0.3;
+                    if ($data['entropy'] < $min_entropy) {
+                        $score += 35;
+                        $reasons[] = 'Low mouse movement entropy (predictable patterns)';
+                    }
+                }
+                
+                // Check smoothness (too smooth = bot)
+                if (isset($data['smoothness'])) {
+                    $max_smoothness = $mouse_config['curve_smoothness_max'] ?? 0.9;
+                    if ($data['smoothness'] > $max_smoothness) {
+                        $score += 30;
+                        $reasons[] = 'Overly smooth mouse curves (no natural variation)';
+                    }
+                }
+                
+                // Check jitter (humans have natural hand tremor)
+                if (isset($data['jitter'])) {
+                    $min_jitter = $mouse_config['min_jitter_variance'] ?? 0.1;
+                    if ($data['jitter'] < $min_jitter && $mouse_config['jitter_required'] ?? true) {
+                        $score += 25;
+                        $reasons[] = 'No mouse jitter (missing natural hand tremor)';
+                    }
+                }
+                
+                // Check for linear movements
+                if (isset($data['is_linear']) && $data['is_linear']) {
+                    $score += 40;
+                    $reasons[] = 'Perfectly linear mouse movements (bot-like)';
+                }
+            }
+        }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+/**
+ * Detect idealized/perfect behavior patterns
+ * Humans make mistakes and show variance - bots don't
+ */
+function detect_idealized_behavior($ip) {
+    global $config;
+    
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    $idealized_config = $config['idealized_behavior'] ?? [];
+    
+    $all_sessions = $behaviors[$ip]['sessions'];
+    
+    // 1. Check for perfect timing (zero variance)
+    $all_intervals = [];
+    foreach ($all_sessions as $session) {
+        if (isset($session['actions']) && count($session['actions']) > 2) {
+            for ($i = 1; $i < count($session['actions']); $i++) {
+                $interval = $session['actions'][$i]['timestamp'] - $session['actions'][$i-1]['timestamp'];
+                $all_intervals[] = $interval;
+            }
+        }
+    }
+    
+    if (count($all_intervals) >= 5) {
+        $avg_interval = array_sum($all_intervals) / count($all_intervals);
+        $variance = 0;
+        foreach ($all_intervals as $interval) {
+            $variance += pow($interval - $avg_interval, 2);
+        }
+        $variance = $variance / count($all_intervals);
+        $std_dev = sqrt($variance);
+        
+        // Calculate coefficient of variation
+        $cv = $avg_interval > 0 ? ($std_dev / $avg_interval) : 0;
+        
+        $perfect_timing_threshold = $idealized_config['perfect_timing_threshold'] ?? 0.15;
+        if ($cv < $perfect_timing_threshold) {
+            $penalty = $idealized_config['identical_path_penalty'] ?? 50;
+            $score += $penalty;
+            $reasons[] = 'Perfect timing intervals (mathematical precision, no human variance)';
+        }
+    }
+    
+    // 2. Check for zero errors across all sessions
+    $total_actions = 0;
+    $error_actions = 0;
+    foreach ($all_sessions as $session) {
+        if (isset($session['actions'])) {
+            foreach ($session['actions'] as $action) {
+                $total_actions++;
+                if (in_array($action['action'], ['keystroke', 'click_canceled']) && 
+                    isset($action['data']['input_error']) && $action['data']['input_error']) {
+                    $error_actions++;
+                }
+            }
+        }
+    }
+    
+    if ($total_actions > 20 && $error_actions === 0) {
+        $penalty = $idealized_config['zero_error_penalty'] ?? 40;
+        $score += $penalty;
+        $reasons[] = 'Zero errors in ' . $total_actions . ' actions (inhuman perfection)';
+    }
+    
+    // 3. Check for identical navigation paths
+    $nav_paths = [];
+    foreach ($all_sessions as $session) {
+        $path = [];
+        if (isset($session['actions'])) {
+            foreach ($session['actions'] as $action) {
+                if ($action['action'] === 'navigate' && isset($action['data']['path'])) {
+                    $path[] = $action['data']['path'];
+                }
+            }
+        }
+        if (!empty($path)) {
+            $nav_paths[] = implode('->', $path);
+        }
+    }
+    
+    if (count($nav_paths) >= 2) {
+        $unique_paths = count(array_unique($nav_paths));
+        if ($unique_paths === 1) {
+            // All paths identical
+            $penalty = $idealized_config['identical_path_penalty'] ?? 50;
+            $score += $penalty;
+            $reasons[] = 'Identical navigation path repeated across all sessions';
+        }
+    }
+    
+    // 4. Check for reused fingerprints across sessions
+    $fps = load_fingerprints();
+    $fp_history = [];
+    foreach ($fps as $ip_key => $fp_data) {
+        if ($ip_key === $ip && isset($fp_data['hash'])) {
+            $fp_history[] = $fp_data['hash'];
+        }
+    }
+    
+    // Check if same fingerprint used multiple times (should change hourly)
+    if (count($fp_history) > 1) {
+        $unique_fps = count(array_unique($fp_history));
+        if ($unique_fps === 1 && count($fp_history) >= 3) {
+            $penalty = $idealized_config['identical_fingerprint_penalty'] ?? 60;
+            $score += $penalty;
+            $reasons[] = 'Identical fingerprint reused ' . count($fp_history) . ' times (replay attack)';
+        }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+function analyze_session_continuity($ip) {
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
 function analyze_session_continuity($ip) {
     $behaviors = load_behavior_data();
     if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
@@ -878,10 +1063,53 @@ function analyze_session_continuity($ip) {
 }
 
 function calculate_bot_confidence($ip) {
+    global $config;
+    
+    // Run all analysis domains
     $temporal = analyze_temporal_patterns($ip);
     $noise = analyze_interaction_noise($ip);
     $semantics = analyze_ui_semantics($ip);
     $continuity = analyze_session_continuity($ip);
+    $mouse = analyze_mouse_movements($ip);
+    $idealized = detect_idealized_behavior($ip);
+    
+    // ============================================
+    // DYNAMIC WEIGHTS WITH RANDOMIZATION
+    // ============================================
+    
+    // Base weights for each domain
+    $base_weights = [
+        'temporal' => 0.20,
+        'noise' => 0.15,
+        'semantics' => 0.15,
+        'continuity' => 0.15,
+        'mouse' => 0.20,
+        'idealized' => 0.15
+    ];
+    
+    // Apply randomization to prevent reverse engineering
+    $randomization_pct = ($config['weight_randomization'] ?? 10) / 100;
+    $weights = [];
+    
+    if ($config['evaluation_order_randomized'] ?? true) {
+        foreach ($base_weights as $domain => $weight) {
+            // Add random variance +/- randomization_pct
+            $variance = (mt_rand() / mt_getrandmax() * 2 - 1) * $randomization_pct;
+            $weights[$domain] = $weight * (1 + $variance);
+        }
+        
+        // Normalize weights to sum to 1.0
+        $total = array_sum($weights);
+        foreach ($weights as $domain => $weight) {
+            $weights[$domain] = $weight / $total;
+        }
+    } else {
+        $weights = $base_weights;
+    }
+    
+    // ============================================
+    // NON-LINEAR SCORING SYSTEM
+    // ============================================
     
     // Non-linear scoring system for threat evaluation
     // High scores are amplified, low scores are dampened
@@ -907,36 +1135,79 @@ function calculate_bot_confidence($ip) {
     $noise_adjusted = $apply_nonlinear($noise['score']);
     $semantics_adjusted = $apply_nonlinear($semantics['score']);
     $continuity_adjusted = $apply_nonlinear($continuity['score']);
+    $mouse_adjusted = $apply_nonlinear($mouse['score']);
+    $idealized_adjusted = $apply_nonlinear($idealized['score']);
     
-    // Weighted average with adjusted scores
+    // Weighted average with dynamic weights
     $total_score = (
-        $temporal_adjusted * 0.3 +
-        $noise_adjusted * 0.25 +
-        $semantics_adjusted * 0.25 +
-        $continuity_adjusted * 0.2
+        $temporal_adjusted * $weights['temporal'] +
+        $noise_adjusted * $weights['noise'] +
+        $semantics_adjusted * $weights['semantics'] +
+        $continuity_adjusted * $weights['continuity'] +
+        $mouse_adjusted * $weights['mouse'] +
+        $idealized_adjusted * $weights['idealized']
     );
     
     // Apply final non-linear transformation to total
     $final_score = $apply_nonlinear($total_score);
     
+    // ============================================
+    // DYNAMIC THRESHOLDS WITH RANDOMIZATION
+    // ============================================
+    
+    // Randomize thresholds to prevent reverse engineering
+    $human_threshold = mt_rand(
+        $config['threshold_human_min'] ?? 15,
+        $config['threshold_human_max'] ?? 25
+    );
+    
+    $bot_threshold = mt_rand(
+        $config['threshold_bot_min'] ?? 50,
+        $config['threshold_bot_max'] ?? 65
+    );
+    
+    // Collect all reasons
     $all_reasons = array_merge(
         $temporal['reasons'],
         $noise['reasons'],
         $semantics['reasons'],
-        $continuity['reasons']
+        $continuity['reasons'],
+        $mouse['reasons'],
+        $idealized['reasons']
     );
+    
+    // ============================================
+    // SILENT SCORING (OBFUSCATED OUTPUT)
+    // ============================================
+    
+    $silent_scoring = $config['silent_scoring_enabled'] ?? true;
     
     return [
         'confidence' => min($final_score, 100),
-        'is_confident_human' => $final_score < 20,
-        'is_uncertain' => $final_score >= 20 && $final_score < 57,
-        'is_likely_bot' => $final_score >= 57,
+        'is_confident_human' => $final_score < $human_threshold,
+        'is_uncertain' => $final_score >= $human_threshold && $final_score < $bot_threshold,
+        'is_likely_bot' => $final_score >= $bot_threshold,
         'reasons' => $all_reasons,
         'domain_scores' => [
             'temporal' => $temporal['score'],
             'noise' => $noise['score'],
             'semantics' => $semantics['score'],
-            'continuity' => $continuity['score']
+            'continuity' => $continuity['score'],
+            'mouse' => $mouse['score'],
+            'idealized' => $idealized['score']
+        ],
+        'adjusted_scores' => $silent_scoring ? 'hidden' : [
+            'temporal' => $temporal_adjusted,
+            'noise' => $noise_adjusted,
+            'semantics' => $semantics_adjusted,
+            'continuity' => $continuity_adjusted,
+            'mouse' => $mouse_adjusted,
+            'idealized' => $idealized_adjusted
+        ],
+        'weights_used' => $silent_scoring ? 'hidden' : $weights,
+        'thresholds_used' => $silent_scoring ? 'hidden' : [
+            'human' => $human_threshold,
+            'bot' => $bot_threshold
         ]
     ];
 }

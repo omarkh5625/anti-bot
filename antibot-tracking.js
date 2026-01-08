@@ -456,22 +456,191 @@
     
     // Track mouse movement patterns (sample based on throttle interval)
     let lastMouseTrack = 0;
+    let mouseMovementBuffer = [];
+    
     document.addEventListener('mousemove', function(e) {
         const now = Date.now();
         if (now - lastMouseTrack < MOUSE_MOVE_THROTTLE_MS) return;
         
         lastMouseTrack = now;
-        behaviorTracker.mouseMovements.push({
+        const movement = {
             x: e.clientX,
             y: e.clientY,
             time: now
-        });
+        };
+        
+        behaviorTracker.mouseMovements.push(movement);
+        mouseMovementBuffer.push(movement);
+        
+        // Analyze mouse movement characteristics every 20 movements
+        if (mouseMovementBuffer.length >= 20) {
+            analyzeMouse Movements(mouseMovementBuffer);
+            mouseMovementBuffer = mouseMovementBuffer.slice(-10); // Keep last 10 for continuity
+        }
         
         // Keep only recent movements
         if (behaviorTracker.mouseMovements.length > MAX_MOUSE_MOVEMENTS) {
             behaviorTracker.mouseMovements.shift();
         }
     });
+    
+    /**
+     * Analyze mouse movement characteristics
+     * Detects: curves, jitter, entropy, smoothness
+     */
+    function analyzeMouseMovements(movements) {
+        if (movements.length < 10) return;
+        
+        // Calculate movement entropy
+        const entropy = calculateMovementEntropy(movements);
+        
+        // Calculate curve smoothness
+        const smoothness = calculateCurveSmoothness(movements);
+        
+        // Calculate jitter variance
+        const jitter = calculateJitter(movements);
+        
+        // Detect linear movements (bot-like)
+        const isLinear = detectLinearMovement(movements);
+        
+        // Track the analysis
+        behaviorTracker.trackAction('mouse_analysis', {
+            entropy: entropy,
+            smoothness: smoothness,
+            jitter: jitter,
+            is_linear: isLinear,
+            movements_analyzed: movements.length
+        });
+    }
+    
+    /**
+     * Calculate movement entropy
+     * Higher entropy = more random/human-like
+     */
+    function calculateMovementEntropy(movements) {
+        if (movements.length < 2) return 0;
+        
+        const angles = [];
+        for (let i = 1; i < movements.length; i++) {
+            const dx = movements[i].x - movements[i-1].x;
+            const dy = movements[i].y - movements[i-1].y;
+            const angle = Math.atan2(dy, dx);
+            angles.push(angle);
+        }
+        
+        // Discretize angles into 8 directions
+        const buckets = new Array(8).fill(0);
+        angles.forEach(angle => {
+            const bucket = Math.floor(((angle + Math.PI) / (2 * Math.PI)) * 8) % 8;
+            buckets[bucket]++;
+        });
+        
+        // Calculate Shannon entropy
+        let entropy = 0;
+        const total = angles.length;
+        buckets.forEach(count => {
+            if (count > 0) {
+                const p = count / total;
+                entropy -= p * Math.log2(p);
+            }
+        });
+        
+        return entropy / 3; // Normalize to 0-1 range (max entropy for 8 buckets is 3)
+    }
+    
+    /**
+     * Calculate curve smoothness
+     * Too smooth = bot-like
+     */
+    function calculateCurveSmoothness(movements) {
+        if (movements.length < 3) return 0;
+        
+        let totalAngleChange = 0;
+        for (let i = 2; i < movements.length; i++) {
+            const dx1 = movements[i-1].x - movements[i-2].x;
+            const dy1 = movements[i-1].y - movements[i-2].y;
+            const dx2 = movements[i].x - movements[i-1].x;
+            const dy2 = movements[i].y - movements[i-1].y;
+            
+            const angle1 = Math.atan2(dy1, dx1);
+            const angle2 = Math.atan2(dy2, dx2);
+            
+            let angleDiff = Math.abs(angle2 - angle1);
+            if (angleDiff > Math.PI) {
+                angleDiff = 2 * Math.PI - angleDiff;
+            }
+            
+            totalAngleChange += angleDiff;
+        }
+        
+        // Average angle change - lower values = smoother/more bot-like
+        const avgAngleChange = totalAngleChange / (movements.length - 2);
+        return avgAngleChange / Math.PI; // Normalize to 0-1
+    }
+    
+    /**
+     * Calculate jitter (micro-movements)
+     * Humans have natural hand tremor, bots don't
+     */
+    function calculateJitter(movements) {
+        if (movements.length < 5) return 0;
+        
+        const speeds = [];
+        for (let i = 1; i < movements.length; i++) {
+            const dx = movements[i].x - movements[i-1].x;
+            const dy = movements[i].y - movements[i-1].y;
+            const dt = movements[i].time - movements[i-1].time;
+            
+            if (dt > 0) {
+                const speed = Math.sqrt(dx*dx + dy*dy) / dt;
+                speeds.push(speed);
+            }
+        }
+        
+        if (speeds.length < 2) return 0;
+        
+        // Calculate variance in speed (jitter)
+        const avgSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+        const variance = speeds.reduce((sum, speed) => sum + Math.pow(speed - avgSpeed, 2), 0) / speeds.length;
+        
+        return Math.min(variance / 100, 1); // Normalize
+    }
+    
+    /**
+     * Detect perfectly linear movements (bot-like)
+     */
+    function detectLinearMovement(movements) {
+        if (movements.length < 5) return false;
+        
+        // Calculate if points lie on a straight line using least squares
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        
+        for (let i = 0; i < movements.length; i++) {
+            sumX += movements[i].x;
+            sumY += movements[i].y;
+            sumXY += movements[i].x * movements[i].y;
+            sumX2 += movements[i].x * movements[i].x;
+        }
+        
+        const n = movements.length;
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const intercept = (sumY - slope * sumX) / n;
+        
+        // Calculate R-squared (coefficient of determination)
+        let ssRes = 0, ssTot = 0;
+        const meanY = sumY / n;
+        
+        for (let i = 0; i < movements.length; i++) {
+            const predicted = slope * movements[i].x + intercept;
+            ssRes += Math.pow(movements[i].y - predicted, 2);
+            ssTot += Math.pow(movements[i].y - meanY, 2);
+        }
+        
+        const rSquared = 1 - (ssRes / ssTot);
+        
+        // If R-squared > 0.95, movement is highly linear (bot-like)
+        return rSquared > 0.95;
+    }
     
     // 3. UI SEMANTICS TRACKING
     
