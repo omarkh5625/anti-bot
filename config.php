@@ -180,15 +180,22 @@ return [
     /**
      * Secure logging configuration
      * 
+     * Default: Secure mode DISABLED for full visibility in admin dashboard.
+     * 
+     * For production with privacy requirements, enable secure mode:
+     * - Set hash_fingerprints to true: IP addresses will be hashed
+     * - Set hide_rejection_reasons to true: Detection flags will be hidden
+     * - Set hide_raw_scores to true: Bot scores will be hidden
+     * 
      * Note: When hash_fingerprints is enabled, IP addresses are hashed
      * in access_log.json for privacy. The admin dashboard will show
      * truncated hash values with "(hashed)" indicator. Full IP addresses
      * are only stored in security.log for authorized access.
      */
     'logging' => [
-        'hash_fingerprints' => true,         // Hash IP addresses and fingerprints in access logs
-        'hide_rejection_reasons' => true,    // Hide detailed rejection reasons
-        'hide_raw_scores' => true,           // Hide raw bot scores
+        'hash_fingerprints' => false,        // Hash IP addresses and fingerprints in access logs (set to true for privacy)
+        'hide_rejection_reasons' => false,   // Hide detailed rejection reasons (set to true for security)
+        'hide_raw_scores' => false,          // Hide raw bot scores (set to true for security)
         'separate_security_logs' => true,    // Use separate security log
         'log_rotation_size' => 10485760,     // 10MB
         'log_retention_days' => 30,          // Keep logs for 30 days

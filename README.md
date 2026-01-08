@@ -127,11 +127,11 @@ return [
     'threshold_bot_max' => 65,
     'weight_randomization' => 10, // +/- 10%
     
-    // Logging
+    // Logging (default: disabled for full visibility)
     'logging' => [
-        'hash_fingerprints' => true,
-        'hide_rejection_reasons' => true,
-        'hide_raw_scores' => true,
+        'hash_fingerprints' => false,        // Set true for privacy
+        'hide_rejection_reasons' => false,   // Set true for security
+        'hide_raw_scores' => false,          // Set true for security
         'separate_security_logs' => true,
     ],
 ];
