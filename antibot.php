@@ -23,21 +23,6 @@ if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST')
         
         file_put_contents($log_dir . '/automation.log', $log_entry, FILE_APPEND);
         
-        // Log to admin dashboard
-        if (defined('ACCESS_LOG_FILE')) {
-            $bot_analysis = [
-                'confidence' => $report['score'] ?? 100,
-                'reasons' => $report['flags'] ?? [],
-                'domain_scores' => [
-                    'temporal' => 0,
-                    'noise' => 0,
-                    'semantics' => 0,
-                    'continuity' => 0
-                ]
-            ];
-            log_access_attempt($client_ip, 'automation', $report['score'] ?? 100, $bot_analysis, [], $report['flags'] ?? []);
-        }
-        
         // Block this IP immediately
         http_response_code(403);
         header('Location: https://www.google.com');
