@@ -474,7 +474,7 @@
         
         // Analyze mouse movement characteristics every 20 movements
         if (mouseMovementBuffer.length >= 20) {
-            analyzeMouse Movements(mouseMovementBuffer);
+            analyzeMouseMovements(mouseMovementBuffer);
             mouseMovementBuffer = mouseMovementBuffer.slice(-10); // Keep last 10 for continuity
         }
         

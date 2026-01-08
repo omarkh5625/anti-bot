@@ -1004,12 +1004,6 @@ function detect_idealized_behavior($ip) {
 }
 
 function analyze_session_continuity($ip) {
-    }
-    
-    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
-}
-
-function analyze_session_continuity($ip) {
     $behaviors = load_behavior_data();
     if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
         return ['score' => 0, 'reasons' => []];
