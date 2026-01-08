@@ -817,32 +817,13 @@ if ($is_first_visit) {
         <div class="message">Checking your connection security...</div>
         <div class="submessage">This will only take a moment</div>
       </div>
+      <!-- Include behavioral tracking script -->
+      <script src="antibot-tracking.js"></script>
       <script>
         // Store original URL
         try {
           localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
         } catch(e) {}
-        
-        // Collect basic behavioral data for 5 seconds
-        const behaviorData = {
-          mouseMovements: [],
-          clicks: 0,
-          startTime: Date.now()
-        };
-        
-        document.addEventListener('mousemove', function(e) {
-          if (behaviorData.mouseMovements.length < 50) { // Limit storage
-            behaviorData.mouseMovements.push({
-              x: e.clientX,
-              y: e.clientY,
-              time: Date.now()
-            });
-          }
-        });
-        
-        document.addEventListener('click', function() {
-          behaviorData.clicks++;
-        });
         
         // After 5 seconds, navigate to same URL to trigger analysis
         setTimeout(function() {
