@@ -2446,14 +2446,13 @@ if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
             date("Y-m-d H:i:s") . " | SILENT_AGING_DELAY | IP: {$client_ip} | Reason: Low trust, renewal failed\n", 
             FILE_APPEND);
         
-        // Quality reduction: Show slower loading but still allow access
-        // NO CAPTCHA as per requirements
+        // Quality reduction: Show slower loading but allow manual continue
+        // NO CAPTCHA and NO automatic refresh to prevent infinite loops
         ?>
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="3;url=<?php echo htmlspecialchars($_SERVER['REQUEST_URI']); ?>">
             <title>Loading...</title>
             <style>
                 body {
@@ -2481,12 +2480,27 @@ if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
                     0% { transform: rotate(0deg); }
                     100% { transform: rotate(360deg); }
                 }
+                .continue-btn {
+                    margin-top: 20px;
+                    padding: 10px 20px;
+                    background: #3498db;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    text-decoration: none;
+                    display: inline-block;
+                }
+                .continue-btn:hover {
+                    background: #2980b9;
+                }
             </style>
         </head>
         <body>
             <div class="loader">
                 <div class="spinner"></div>
-                <p>Loading your content...</p>
+                <p>Verifying your session...</p>
+                <a href="<?php echo htmlspecialchars($_SERVER['REQUEST_URI']); ?>" class="continue-btn">Continue</a>
             </div>
         </body>
         </html>

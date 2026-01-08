@@ -94,7 +94,7 @@ return [
     
     // Silent Session Aging
     'silent_aging' => [
-        'enabled' => true,
+        'enabled' => false, // Disabled by default to prevent redirect loops for new users
         'long_session_threshold' => 7200, // 2 hours = long session
         'confidence_decay_rate' => 10, // % decay per hour for long sessions
         'auto_renew_nonce' => true, // Re-sign session with new nonce
