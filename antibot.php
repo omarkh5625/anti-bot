@@ -31,6 +31,59 @@ if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST')
     exit;
 }
 
+// ✅ Handle behavioral tracking data from frontend
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['track_behavior'])) {
+    $behavior_json = $_POST['behavior_data'] ?? '';
+    
+    // Validate data size
+    if (strlen($behavior_json) > 0 && strlen($behavior_json) <= 102400) { // 100KB max
+        $behavior_data = json_decode($behavior_json, true);
+        
+        if ($behavior_data && isset($behavior_data['session_id'], $behavior_data['action'])) {
+            $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            
+            // Track the behavioral data
+            if ($behavior_data['action'] === 'batch_tracking') {
+                // Load existing behavior data
+                $all_behaviors = load_behavior_data();
+                
+                if (!isset($all_behaviors[$client_ip])) {
+                    $all_behaviors[$client_ip] = ['sessions' => [], 'first_seen' => time()];
+                }
+                
+                $session_id = preg_replace('/[^a-zA-Z0-9_-]/', '', $behavior_data['session_id']);
+                $session_id = substr($session_id, 0, 64);
+                
+                if (!isset($all_behaviors[$client_ip]['sessions'][$session_id])) {
+                    $all_behaviors[$client_ip]['sessions'][$session_id] = [
+                        'actions' => [],
+                        'start_time' => time()
+                    ];
+                }
+                
+                // Add actions from the batch
+                if (isset($behavior_data['actions']) && is_array($behavior_data['actions'])) {
+                    foreach ($behavior_data['actions'] as $action) {
+                        $all_behaviors[$client_ip]['sessions'][$session_id]['actions'][] = [
+                            'action' => $action['action'] ?? 'unknown',
+                            'timestamp' => $action['timestamp'] ?? time(),
+                            'type' => $action['action'] ?? 'unknown',
+                            'data' => $action['data'] ?? []
+                        ];
+                    }
+                }
+                
+                // Save updated behavior data
+                save_behavior_data($all_behaviors);
+            }
+        }
+    }
+    
+    // Return success (no output needed for beacon)
+    http_response_code(204); // No Content
+    exit;
+}
+
 // ✅ استثناء كامل لمكالمات fetch()
 if (
     in_array($basename, ['start_session.php', 'render.php']) &&
