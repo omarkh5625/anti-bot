@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
         header('Location: ' . $_SERVER['PHP_SELF']);
         exit;
     } else {
-        $login_error = 'كلمة المرور غير صحيحة';
+        $login_error = 'Incorrect password';
     }
 }
 
@@ -53,11 +53,11 @@ if (isset($_GET['logout'])) {
 if (!isset($_SESSION['admin_logged_in']) || !$_SESSION['admin_logged_in']) {
     ?>
     <!DOCTYPE html>
-    <html dir="rtl" lang="ar">
+    <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>تسجيل الدخول - لوحة المراقبة</title>
+        <title>Login - Anti-Bot Monitoring Dashboard</title>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
@@ -127,13 +127,13 @@ if (!isset($_SESSION['admin_logged_in']) || !$_SESSION['admin_logged_in']) {
     <body>
         <div class="login-box">
             <div class="icon">🔒</div>
-            <h1>لوحة مراقبة Anti-Bot</h1>
+            <h1>Anti-Bot Monitoring Dashboard</h1>
             <?php if (isset($login_error)): ?>
                 <div class="error"><?= htmlspecialchars($login_error) ?></div>
             <?php endif; ?>
             <form method="POST">
-                <input type="password" name="password" placeholder="كلمة المرور" required autofocus>
-                <button type="submit">دخول</button>
+                <input type="password" name="password" placeholder="Password" required autofocus>
+                <button type="submit">Login</button>
             </form>
         </div>
     </body>
@@ -274,11 +274,11 @@ $recent_attempts = get_recent_attempts(50);
 
 ?>
 <!DOCTYPE html>
-<html dir="rtl" lang="ar">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة مراقبة Anti-Bot - الإحصائيات والسجلات</title>
+    <title>Anti-Bot Monitoring Dashboard - Statistics & Logs</title>
     <style>
         * {
             margin: 0;
@@ -290,7 +290,7 @@ $recent_attempts = get_recent_attempts(50);
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #f5f7fa;
             padding: 20px;
-            direction: rtl;
+            direction: ltr;
         }
         
         .header {
@@ -396,7 +396,7 @@ $recent_attempts = get_recent_attempts(50);
         .access-table th,
         .access-table td {
             padding: 12px;
-            text-align: right;
+            text-align: left;
             border-bottom: 1px solid #e0e0e0;
         }
         
@@ -644,58 +644,58 @@ $recent_attempts = get_recent_attempts(50);
     <div class="header">
         <h1>
             <span>🛡️</span>
-            لوحة مراقبة Anti-Bot
+            Anti-Bot Monitoring Dashboard
         </h1>
-        <a href="?logout" class="logout-btn">تسجيل الخروج</a>
+        <a href="?logout" class="logout-btn">Logout</a>
     </div>
     
     <!-- Statistics Cards -->
     <div class="stats-grid">
         <div class="stat-card total">
             <div class="icon">📊</div>
-            <div class="label">إجمالي المحاولات</div>
+            <div class="label">Total Attempts</div>
             <div class="value"><?= number_format($statistics['total']) ?></div>
         </div>
         
         <div class="stat-card humans">
             <div class="icon">✅</div>
-            <div class="label">بشر (دخول مباشر)</div>
+            <div class="label">Humans (Direct Access)</div>
             <div class="value"><?= number_format($statistics['humans']) ?></div>
         </div>
         
         <div class="stat-card uncertain">
             <div class="icon">⚠️</div>
-            <div class="label">مشكوك فيه (CAPTCHA)</div>
+            <div class="label">Uncertain (CAPTCHA)</div>
             <div class="value"><?= number_format($statistics['uncertain']) ?></div>
         </div>
         
         <div class="stat-card bots">
             <div class="icon">🚫</div>
-            <div class="label">بوتات محظورة</div>
+            <div class="label">Bots Blocked</div>
             <div class="value"><?= number_format($statistics['bots']) ?></div>
         </div>
         
         <div class="stat-card">
             <div class="icon">🤖</div>
-            <div class="label">Automation محظور</div>
+            <div class="label">Automation Blocked</div>
             <div class="value"><?= number_format($statistics['blocked_automation']) ?></div>
         </div>
         
         <div class="stat-card">
             <div class="icon">📅</div>
-            <div class="label">اليوم</div>
+            <div class="label">Today</div>
             <div class="value"><?= number_format($statistics['today']) ?></div>
         </div>
         
         <div class="stat-card">
             <div class="icon">⏰</div>
-            <div class="label">آخر ساعة</div>
+            <div class="label">Last Hour</div>
             <div class="value"><?= number_format($statistics['this_hour']) ?></div>
         </div>
         
         <div class="stat-card">
             <div class="icon">📈</div>
-            <div class="label">معدل الكشف</div>
+            <div class="label">Detection Rate</div>
             <div class="value">
                 <?php 
                 $detection_rate = $statistics['total'] > 0 
@@ -711,24 +711,24 @@ $recent_attempts = get_recent_attempts(50);
     <div class="section">
         <h2>
             <span>📋</span>
-            سجل المحاولات الأخيرة (آخر 50)
+            Recent Access Attempts (Last 50)
         </h2>
         
         <?php if (empty($recent_attempts)): ?>
             <div class="empty-state">
                 <div class="icon">📭</div>
-                <p>لا توجد محاولات دخول حتى الآن</p>
+                <p>No access attempts yet</p>
             </div>
         <?php else: ?>
             <table class="access-table">
                 <thead>
                     <tr>
-                        <th>الوقت</th>
+                        <th>Time</th>
                         <th>IP Address</th>
-                        <th>النتيجة</th>
+                        <th>Verdict</th>
                         <th>Bot Score</th>
                         <th>User Agent</th>
-                        <th>التفاصيل</th>
+                        <th>Details</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -740,11 +740,11 @@ $recent_attempts = get_recent_attempts(50);
                                 <?php
                                 $verdict = $attempt['verdict'] ?? 'unknown';
                                 $verdict_text = [
-                                    'human' => 'إنسان',
-                                    'bot' => 'بوت',
-                                    'uncertain' => 'مشكوك',
-                                    'automation' => 'أتمتة',
-                                    'unknown' => 'غير معروف'
+                                    'human' => 'Human',
+                                    'bot' => 'Bot',
+                                    'uncertain' => 'Uncertain',
+                                    'automation' => 'Automation',
+                                    'unknown' => 'Unknown'
                                 ];
                                 ?>
                                 <span class="badge <?= htmlspecialchars($verdict) ?>">
@@ -761,7 +761,7 @@ $recent_attempts = get_recent_attempts(50);
                             </td>
                             <td>
                                 <button class="details-btn" onclick="showDetails(<?= $index ?>)">
-                                    عرض التفاصيل
+                                    View Details
                                 </button>
                             </td>
                         </tr>
@@ -775,8 +775,8 @@ $recent_attempts = get_recent_attempts(50);
     <div id="detailsModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>تفاصيل محاولة الدخول</h2>
-                <button class="close-btn" onclick="closeModal()">إغلاق</button>
+                <h2>Access Attempt Details</h2>
+                <button class="close-btn" onclick="closeModal()">Close</button>
             </div>
             <div id="modalBody">
                 <!-- Details will be inserted here by JavaScript -->
@@ -785,7 +785,7 @@ $recent_attempts = get_recent_attempts(50);
     </div>
     
     <button class="refresh-btn" onclick="location.reload()">
-        🔄 تحديث
+        🔄 Refresh
     </button>
     
     <script>
@@ -806,7 +806,7 @@ $recent_attempts = get_recent_attempts(50);
                 <div class="detail-value">${escapeHtml(attempt.ip || 'N/A')}</div>
             </div>`;
             html += `<div class="detail-item">
-                <div class="detail-label">الوقت</div>
+                <div class="detail-label">Time</div>
                 <div class="detail-value">${escapeHtml(attempt.timestamp || 'N/A')}</div>
             </div>`;
             html += `<div class="detail-item">
@@ -814,44 +814,44 @@ $recent_attempts = get_recent_attempts(50);
                 <div class="detail-value">${attempt.bot_score ? attempt.bot_score.toFixed(2) + '%' : 'N/A'}</div>
             </div>`;
             html += `<div class="detail-item">
-                <div class="detail-label">النتيجة</div>
+                <div class="detail-label">Verdict</div>
                 <div class="detail-value">${escapeHtml(attempt.verdict || 'N/A')}</div>
             </div>`;
             html += '</div>';
             
             // Bot Characteristics
             if (attempt.characteristics) {
-                html += '<h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">خصائص البوت المكتشفة:</h3>';
+                html += '<h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">Bot Characteristics Detected:</h3>';
                 html += '<div class="details-grid">';
                 
                 const chars = attempt.characteristics;
                 if (chars.sessions) {
                     html += `<div class="detail-item">
-                        <div class="detail-label">عدد الجلسات</div>
+                        <div class="detail-label">Number of Sessions</div>
                         <div class="detail-value">${chars.sessions}</div>
                     </div>`;
                 }
                 if (chars.timing_pattern) {
                     html += `<div class="detail-item">
-                        <div class="detail-label">نمط التوقيت</div>
+                        <div class="detail-label">Timing Pattern</div>
                         <div class="detail-value">${escapeHtml(chars.timing_pattern)}</div>
                     </div>`;
                 }
                 if (chars.error_rate !== undefined) {
                     html += `<div class="detail-item">
-                        <div class="detail-label">نسبة الأخطاء</div>
+                        <div class="detail-label">Error Rate</div>
                         <div class="detail-value">${chars.error_rate}%</div>
                     </div>`;
                 }
                 if (chars.ui_interaction) {
                     html += `<div class="detail-item">
-                        <div class="detail-label">تفاعل UI</div>
+                        <div class="detail-label">UI Interaction</div>
                         <div class="detail-value">${escapeHtml(chars.ui_interaction)}</div>
                     </div>`;
                 }
                 if (chars.session_gaps) {
                     html += `<div class="detail-item">
-                        <div class="detail-label">فجوات الجلسات</div>
+                        <div class="detail-label">Session Gaps</div>
                         <div class="detail-value">${escapeHtml(chars.session_gaps)}</div>
                     </div>`;
                 }
@@ -860,7 +860,7 @@ $recent_attempts = get_recent_attempts(50);
             
             // Domain Scores
             if (attempt.domain_scores) {
-                html += '<h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">نتائج تحليل المجالات:</h3>';
+                html += '<h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">Detection Domain Analysis:</h3>';
                 html += '<div class="domain-scores">';
                 
                 const domains = attempt.domain_scores;
@@ -868,28 +868,28 @@ $recent_attempts = get_recent_attempts(50);
                     html += `<div class="domain-card">
                         <div class="domain-name">⏱️ Temporal Behavior (30%)</div>
                         <div class="domain-score">${domains.temporal}%</div>
-                        <div class="domain-contribution">المساهمة: ${(domains.temporal * 0.3).toFixed(1)}%</div>
+                        <div class="domain-contribution">Contribution: ${(domains.temporal * 0.3).toFixed(1)}%</div>
                     </div>`;
                 }
                 if (domains.interaction !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🎯 Interaction Noise (25%)</div>
                         <div class="domain-score">${domains.interaction}%</div>
-                        <div class="domain-contribution">المساهمة: ${(domains.interaction * 0.25).toFixed(1)}%</div>
+                        <div class="domain-contribution">Contribution: ${(domains.interaction * 0.25).toFixed(1)}%</div>
                     </div>`;
                 }
                 if (domains.semantics !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🎨 UI Semantics (25%)</div>
                         <div class="domain-score">${domains.semantics}%</div>
-                        <div class="domain-contribution">المساهمة: ${(domains.semantics * 0.25).toFixed(1)}%</div>
+                        <div class="domain-contribution">Contribution: ${(domains.semantics * 0.25).toFixed(1)}%</div>
                     </div>`;
                 }
                 if (domains.continuity !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🔄 Session Continuity (20%)</div>
                         <div class="domain-score">${domains.continuity}%</div>
-                        <div class="domain-contribution">المساهمة: ${(domains.continuity * 0.2).toFixed(1)}%</div>
+                        <div class="domain-contribution">Contribution: ${(domains.continuity * 0.2).toFixed(1)}%</div>
                     </div>`;
                 }
                 html += '</div>';
@@ -898,7 +898,7 @@ $recent_attempts = get_recent_attempts(50);
             // Detection Flags
             if (attempt.flags && attempt.flags.length > 0) {
                 html += '<div class="flags-list">';
-                html += '<h3>⚠️ علامات الكشف المرفوعة:</h3>';
+                html += '<h3>⚠️ Detection Flags Raised:</h3>';
                 html += '<ul>';
                 attempt.flags.forEach(flag => {
                     html += `<li>${escapeHtml(flag)}</li>`;
@@ -915,8 +915,8 @@ $recent_attempts = get_recent_attempts(50);
             
             // Automation Flags
             if (attempt.automation_flags && attempt.automation_flags.length > 0) {
-                html += '<div style="margin-top: 20px; background: #fee2e2; padding: 15px; border-radius: 8px; border-right: 4px solid #ef4444;">';
-                html += '<h3 style="color: #991b1b; font-size: 16px; margin-bottom: 10px;">🤖 Automation Tools محظورة:</h3>';
+                html += '<div style="margin-top: 20px; background: #fee2e2; padding: 15px; border-radius: 8px; border-left: 4px solid #ef4444;">';
+                html += '<h3 style="color: #991b1b; font-size: 16px; margin-bottom: 10px;">🤖 Automation Tools Blocked:</h3>';
                 html += '<ul style="list-style: none; padding: 0;">';
                 attempt.automation_flags.forEach(flag => {
                     html += `<li style="padding: 5px 0; color: #7f1d1d;">🚫 ${escapeHtml(flag)}</li>`;
