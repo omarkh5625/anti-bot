@@ -66,11 +66,19 @@ if (session_status() === PHP_SESSION_NONE) {
 // ⚠️ Consider using password_hash() and password_verify() for production use
 define('ADMIN_PASSWORD', 'admin123'); // Default: admin123 - CHANGE IMMEDIATELY!
 
-// File paths
-define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
-define('AUTOMATION_LOG', __DIR__ . '/logs/automation.log');
-define('ACCESS_LOG', __DIR__ . '/logs/access_log.json');
-define('LOG_DIR', __DIR__ . '/logs');
+// File paths - only define if not already defined
+if (!defined('BEHAVIOR_FILE')) {
+    define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
+}
+if (!defined('AUTOMATION_LOG')) {
+    define('AUTOMATION_LOG', __DIR__ . '/logs/automation.log');
+}
+if (!defined('ACCESS_LOG')) {
+    define('ACCESS_LOG', __DIR__ . '/logs/access_log.json');
+}
+if (!defined('LOG_DIR')) {
+    define('LOG_DIR', __DIR__ . '/logs');
+}
 
 // ==================== AUTO-CREATE FILES & DIRECTORIES ====================
 
