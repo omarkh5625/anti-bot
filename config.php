@@ -144,14 +144,14 @@ return [
     
     // Logging configuration for privacy
     'logging' => [
-        'hash_fingerprints' => true,       // Hash IPs in general logs
-        'hide_rejection_reasons' => true,  // Hide reasons in general logs (show in security log)
-        'hide_raw_scores' => true,         // Hide raw scores (show ranges only)
-        'separate_security_logs' => true,  // Keep detailed security log separate
+        'hash_fingerprints' => false,       // Show real IPs (disabled for debugging)
+        'hide_rejection_reasons' => false,  // Show reasons in logs
+        'hide_raw_scores' => false,         // Show raw scores (for analysis)
+        'separate_security_logs' => true,   // Keep detailed security log separate
     ],
     
     // Silent scoring (hide internal metrics from bots)
-    'silent_scoring_enabled' => true,
+    'silent_scoring_enabled' => false,  // Disabled to show all scores for analysis
     
     // ============================================
     // REPLAY ATTACK PREVENTION
