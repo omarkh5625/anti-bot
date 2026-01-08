@@ -1514,15 +1514,35 @@ function generate_user_agent_hash($user_agent) {
  * Returns true if UA is consistent, false if suspicious change detected
  */
 function validate_user_agent_hash($ip, $current_ua) {
-    $ua_hash_file = __DIR__ . '/ua_hashes.json';
+    // Place UA hash file outside web root or in protected directory
+    $ua_hash_file = __DIR__ . '/logs/ua_hashes.json';
     
-    // Load existing UA hashes
-    $ua_hashes = [];
-    if (file_exists($ua_hash_file)) {
-        $ua_hashes = json_decode(file_get_contents($ua_hash_file), true) ?: [];
+    // Ensure logs directory exists
+    if (!is_dir(__DIR__ . '/logs')) {
+        @mkdir(__DIR__ . '/logs', 0755, true);
+    }
+    
+    // Open file with exclusive lock for reading
+    $fp = fopen($ua_hash_file, 'c+');
+    if (!$fp) {
+        return true; // Fail open if can't access file
+    }
+    
+    // Acquire exclusive lock
+    if (!flock($fp, LOCK_EX)) {
+        fclose($fp);
+        return true; // Fail open if can't lock
+    }
+    
+    // Read existing data
+    $content = stream_get_contents($fp);
+    $ua_hashes = $content ? json_decode($content, true) : [];
+    if (!is_array($ua_hashes)) {
+        $ua_hashes = [];
     }
     
     $current_hash = generate_user_agent_hash($current_ua);
+    $is_valid = true;
     
     // Check if IP has previous UA hash
     if (isset($ua_hashes[$ip])) {
@@ -1533,7 +1553,7 @@ function validate_user_agent_hash($ip, $current_ua) {
         // If UA hash changed within short period (< 1 hour), suspicious
         if ($stored_hash !== $current_hash && (time() - $last_seen) < 3600) {
             // UA rotated too quickly - likely bot
-            return false;
+            $is_valid = false;
         }
     }
     
@@ -1552,10 +1572,16 @@ function validate_user_agent_hash($ip, $current_ua) {
         }
     }
     
-    // Save updated hashes
-    file_put_contents($ua_hash_file, json_encode($ua_hashes, JSON_PRETTY_PRINT));
+    // Write back to file
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode($ua_hashes, JSON_PRETTY_PRINT));
     
-    return true;
+    // Release lock and close
+    flock($fp, LOCK_UN);
+    fclose($fp);
+    
+    return $is_valid;
 }
 
 // Validate User-Agent hash for this request

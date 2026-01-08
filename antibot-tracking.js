@@ -287,19 +287,20 @@
         
         // 13. User-Agent Hash Validation
         // Generate consistent hash for current User-Agent
+        // Use sessionStorage for better privacy (doesn't persist across browser sessions)
         try {
             const uaHash = generateUserAgentHash(navigator.userAgent);
-            const storedHash = localStorage.getItem('antibot_ua_hash');
+            const storedHash = sessionStorage.getItem('antibot_ua_hash');
             
             if (storedHash && storedHash !== uaHash) {
-                // User-Agent changed between sessions - suspicious
+                // User-Agent changed within same session - suspicious
                 flags.push('user_agent_hash_mismatch');
             }
             
-            // Store current hash
-            localStorage.setItem('antibot_ua_hash', uaHash);
+            // Store current hash for session duration only
+            sessionStorage.setItem('antibot_ua_hash', uaHash);
         } catch (e) {
-            // localStorage not available or blocked
+            // sessionStorage not available or blocked
         }
         
         return {

@@ -1,0 +1,11 @@
+# Protect JSON data files from direct access
+<FilesMatch "\.(json)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Protect logs directory
+<DirectoryMatch "logs">
+    Order Allow,Deny
+    Deny from all
+</DirectoryMatch>
