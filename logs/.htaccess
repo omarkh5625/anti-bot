@@ -1,0 +1,8 @@
+# Deny access to all files in logs directory
+<Files "*">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Prevent directory listing
+Options -Indexes

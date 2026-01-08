@@ -375,12 +375,173 @@
             }
         }
         
+        // 11. Advanced Playwright Stealth Detection
+        // Playwright-specific properties and methods that stealth plugins can't fully mask
+        try {
+            // Check for playwright-specific Error.stackTraceLimit behavior
+            const originalLimit = Error.stackTraceLimit;
+            Error.stackTraceLimit = Infinity;
+            const err = new Error();
+            const stack = err.stack;
+            Error.stackTraceLimit = originalLimit;
+            
+            if (stack && (stack.includes('playwright') || stack.includes('Playwright'))) {
+                flags.push('playwright_stack_trace');
+            }
+        } catch (e) {
+            // Stack trace check failed
+        }
+        
+        // Check for playwright property descriptors inconsistencies
+        try {
+            const chromeDesc = Object.getOwnPropertyDescriptor(window, 'chrome');
+            const playwrightPatterns = [
+                !chromeDesc && /Chrome/.test(navigator.userAgent),
+                navigator.plugins.length === 0 && /Chrome/.test(navigator.userAgent),
+                typeof navigator.brave !== 'undefined' && typeof navigator.brave.isBrave === 'undefined'
+            ];
+            
+            let playwrightScore = playwrightPatterns.filter(p => p).length;
+            if (playwrightScore >= 2) {
+                flags.push('playwright_stealth_pattern');
+            }
+        } catch (e) {
+            // Property descriptor check failed
+        }
+        
+        // Check for inconsistent navigator.platform with User-Agent
+        try {
+            const ua = navigator.userAgent;
+            const platform = navigator.platform;
+            
+            // Common Playwright stealth mismatches
+            if ((ua.includes('Win') && platform.includes('Linux')) ||
+                (ua.includes('Mac') && platform.includes('Win')) ||
+                (ua.includes('Linux') && platform.includes('Win'))) {
+                flags.push('playwright_platform_mismatch');
+            }
+        } catch (e) {
+            // Platform check failed
+        }
+        
+        // Check for missing or spoofed navigator.languages
+        try {
+            if (navigator.languages && navigator.languages.length > 0) {
+                const firstLang = navigator.languages[0];
+                const navigatorLang = navigator.language;
+                
+                // Playwright often has mismatches here
+                if (firstLang !== navigatorLang && !firstLang.startsWith(navigatorLang)) {
+                    flags.push('playwright_language_mismatch');
+                }
+            }
+        } catch (e) {
+            // Language check failed
+        }
+        
+        // 12. Advanced Puppeteer Stealth Detection
+        // Puppeteer-extra-plugin-stealth specific checks
+        try {
+            // Check for modified Function.prototype.toString
+            const test = function() {};
+            const testStr = test.toString();
+            const nativeStr = Function.prototype.toString.toString();
+            
+            // Puppeteer stealth plugin modifies toString behavior
+            if (nativeStr.includes('native code') && testStr.includes('function') && 
+                !testStr.includes('[native code]')) {
+                // This is normal
+            } else if (!nativeStr.includes('native code')) {
+                flags.push('puppeteer_stealth_toString_modified');
+            }
+        } catch (e) {
+            // toString check failed
+        }
+        
+        // Check for inconsistent Object.getOwnPropertyDescriptor behavior
+        try {
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            document.body.appendChild(iframe);
+            
+            const iframeWindow = iframe.contentWindow;
+            const descriptor = Object.getOwnPropertyDescriptor(iframeWindow, 'navigator');
+            
+            if (descriptor && !descriptor.configurable) {
+                // Puppeteer stealth makes navigator non-configurable
+                flags.push('puppeteer_stealth_navigator_locked');
+            }
+            
+            document.body.removeChild(iframe);
+        } catch (e) {
+            // iframe check failed
+        }
+        
+        // Check for puppeteer-specific Connection property
+        try {
+            if (window.outerWidth - window.innerWidth === 0 && 
+                window.outerHeight - window.innerHeight === 0) {
+                // Perfect match often indicates headless with stealth
+                flags.push('puppeteer_perfect_viewport');
+            }
+        } catch (e) {
+            // Viewport check failed
+        }
+        
+        // Check for inconsistent chrome object
+        try {
+            if (window.chrome) {
+                const chromeKeys = Object.keys(window.chrome);
+                // Puppeteer stealth adds specific properties
+                const stealthIndicators = ['runtime', 'loadTimes', 'csi'];
+                const hasAllIndicators = stealthIndicators.every(key => chromeKeys.includes(key));
+                
+                if (hasAllIndicators && chromeKeys.length <= 5) {
+                    flags.push('puppeteer_stealth_chrome_minimal');
+                }
+            }
+        } catch (e) {
+            // Chrome object check failed
+        }
+        
+        // 13. User-Agent Hash Validation
+        // Generate consistent hash for current User-Agent
+        // Use sessionStorage for better privacy (doesn't persist across browser sessions)
+        try {
+            const uaHash = generateUserAgentHash(navigator.userAgent);
+            const storedHash = sessionStorage.getItem('antibot_ua_hash');
+            
+            if (storedHash && storedHash !== uaHash) {
+                // User-Agent changed within same session - suspicious
+                flags.push('user_agent_hash_mismatch');
+            }
+            
+            // Store current hash for session duration only
+            sessionStorage.setItem('antibot_ua_hash', uaHash);
+        } catch (e) {
+            // sessionStorage not available or blocked
+        }
+        
         return {
             isAutomated: flags.length > 0,
             flags: flags,
             score: Math.min(flags.length * 10, 100),
             headlessScore: headlessScore
         };
+    }
+    
+    /**
+     * Generate consistent hash for User-Agent string
+     * Used for tracking UA changes across sessions
+     */
+    function generateUserAgentHash(userAgent) {
+        let hash = 0;
+        for (let i = 0; i < userAgent.length; i++) {
+            const char = userAgent.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit integer
+        }
+        return hash.toString(36);
     }
     
     // Run automation detection immediately
