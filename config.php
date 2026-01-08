@@ -81,8 +81,8 @@ return [
     
     // Session binding enforcement levels
     'enforce_subnet_binding' => true,     // Require same IP subnet
-    'enforce_tls_binding' => true,        // Require same TLS fingerprint
-    'enforce_ua_binding' => true,         // Require same user-agent hash
+    'enforce_tls_binding' => false,       // Require same TLS fingerprint (may vary per request)
+    'enforce_ua_binding' => false,        // Require same user-agent hash (allow UA changes)
     
     // ============================================
     // SHADOW ENFORCEMENT

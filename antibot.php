@@ -1819,8 +1819,13 @@ $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
 
 // Session-network binding verification for returning visitors
 if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
+    // Verify session-network binding
+    $binding_valid = verify_session_binding($client_ip, $_COOKIE['fp_hash']);
+    
     // Check if session needs re-evaluation due to aging or behavioral deviation
-    if (needs_reevaluation($client_ip, $config)) {
+    $needs_reeval = needs_reevaluation($client_ip, $config);
+    
+    if ($needs_reeval) {
         // Session trust too low or behavioral deviation detected
         force_session_reverification($client_ip);
         
@@ -1829,20 +1834,42 @@ if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
             date("Y-m-d H:i:s") . " | SESSION_REEVALUATION | IP: {$client_ip} | Reason: Session aging or behavioral deviation\n", 
             FILE_APPEND);
         
-        // Continue to verification flow
-    } else {
-        // Verify session-network binding
-        if (!verify_session_binding($client_ip, $_COOKIE['fp_hash'])) {
-            // Network changed or session binding failed - require re-verification
+        // Continue to verification flow (don't exit, allow re-verification)
+    } elseif (!$binding_valid) {
+        // Network changed or session binding failed
+        // Log suspicious activity but don't immediately clear cookies
+        file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
+            date("Y-m-d H:i:s") . " | SESSION_BINDING_WARNING | IP: {$client_ip} | Reason: Network context may have changed\n", 
+            FILE_APPEND);
+        
+        // Only clear cookies if binding fails multiple times (track failed attempts)
+        $failed_binding_key = 'antibot_binding_fails_' . $client_ip;
+        $failed_attempts = intval($_COOKIE[$failed_binding_key] ?? 0);
+        $failed_attempts++;
+        
+        if ($failed_attempts >= 3) {
+            // After 3 failed binding checks, force re-verification
             setcookie('fp_hash', '', time() - 3600, '/');
             setcookie('js_verified', '', time() - 3600, '/');
             setcookie('analysis_done', '', time() - 3600, '/');
+            setcookie($failed_binding_key, '', time() - 3600, '/');
             
-            // Log suspicious activity
             file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
-                date("Y-m-d H:i:s") . " | SESSION_BINDING_FAILED | IP: {$client_ip} | Reason: Network context changed\n", 
+                date("Y-m-d H:i:s") . " | SESSION_BINDING_FAILED | IP: {$client_ip} | Reason: Multiple binding failures\n", 
                 FILE_APPEND);
+        } else {
+            // Track failed attempt but allow passage
+            setcookie($failed_binding_key, strval($failed_attempts), time() + 1800, '/'); // 30 min expiry
+            // Allow user to continue without re-verification
+            return;
         }
+    } else {
+        // Binding check passed, reset failed attempts counter if exists
+        if (isset($_COOKIE[$failed_binding_key])) {
+            setcookie('antibot_binding_fails_' . $client_ip, '', time() - 3600, '/');
+        }
+        // User is verified and binding is valid, allow passage
+        return;
     }
 }
 
