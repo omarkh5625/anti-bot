@@ -802,7 +802,17 @@ $recent_attempts = get_recent_attempts(50);
                     <?php foreach ($recent_attempts as $index => $attempt): ?>
                         <tr>
                             <td><?= htmlspecialchars($attempt['timestamp'] ?? 'N/A') ?></td>
-                            <td><code><?= htmlspecialchars($attempt['ip'] ?? 'N/A') ?></code></td>
+                            <td><code><?php
+                                // Handle both 'ip' and 'ip_hash' fields
+                                if (isset($attempt['ip'])) {
+                                    echo htmlspecialchars($attempt['ip']);
+                                } elseif (isset($attempt['ip_hash'])) {
+                                    // Show first 16 chars of hash with indicator
+                                    echo htmlspecialchars(substr($attempt['ip_hash'], 0, 16)) . '... (hashed)';
+                                } else {
+                                    echo 'N/A';
+                                }
+                            ?></code></td>
                             <td>
                                 <?php
                                 $verdict = $attempt['verdict'] ?? 'unknown';
@@ -820,7 +830,15 @@ $recent_attempts = get_recent_attempts(50);
                             </td>
                             <td>
                                 <span class="score-badge">
-                                    <?= isset($attempt['bot_score']) ? round($attempt['bot_score'], 2) . '%' : 'N/A' ?>
+                                    <?php
+                                    if (isset($attempt['bot_score'])) {
+                                        echo is_numeric($attempt['bot_score']) 
+                                            ? round($attempt['bot_score'], 2) . '%' 
+                                            : htmlspecialchars($attempt['bot_score']);
+                                    } else {
+                                        echo 'N/A';
+                                    }
+                                    ?>
                                 </span>
                             </td>
                             <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
@@ -859,6 +877,25 @@ $recent_attempts = get_recent_attempts(50);
         // Store attempts data for modal
         const attempts = <?= json_encode($recent_attempts) ?>;
         
+        // Helper function to safely format numeric values
+        function formatScore(value) {
+            if (typeof value === 'number') {
+                return value.toFixed(2) + '%';
+            } else if (value === 'hidden') {
+                return '<span style="color: #999; font-style: italic;">Hidden (secure mode)</span>';
+            } else {
+                return escapeHtml(String(value));
+            }
+        }
+        
+        function formatContribution(value, multiplier) {
+            if (typeof value === 'number') {
+                return 'Contribution: ' + (value * multiplier).toFixed(1) + '%';
+            } else {
+                return 'Contribution: Hidden';
+            }
+        }
+        
         function showDetails(index) {
             const attempt = attempts[index];
             const modal = document.getElementById('detailsModal');
@@ -870,7 +907,10 @@ $recent_attempts = get_recent_attempts(50);
             html += '<div class="details-grid">';
             html += `<div class="detail-item">
                 <div class="detail-label">IP Address</div>
-                <div class="detail-value">${escapeHtml(attempt.ip || 'N/A')}</div>
+                <div class="detail-value">${
+                    attempt.ip ? escapeHtml(attempt.ip) : 
+                    (attempt.ip_hash ? escapeHtml(attempt.ip_hash.substring(0, 16)) + '... (hashed)' : 'N/A')
+                }</div>
             </div>`;
             html += `<div class="detail-item">
                 <div class="detail-label">Time</div>
@@ -878,7 +918,7 @@ $recent_attempts = get_recent_attempts(50);
             </div>`;
             html += `<div class="detail-item">
                 <div class="detail-label">Bot Score</div>
-                <div class="detail-value">${attempt.bot_score ? attempt.bot_score.toFixed(2) + '%' : 'N/A'}</div>
+                <div class="detail-value">${attempt.bot_score ? formatScore(attempt.bot_score) : 'N/A'}</div>
             </div>`;
             html += `<div class="detail-item">
                 <div class="detail-label">Verdict</div>
@@ -934,29 +974,29 @@ $recent_attempts = get_recent_attempts(50);
                 if (domains.temporal !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">⏱️ Temporal Behavior (30%)</div>
-                        <div class="domain-score">${domains.temporal}%</div>
-                        <div class="domain-contribution">Contribution: ${(domains.temporal * 0.3).toFixed(1)}%</div>
+                        <div class="domain-score">${typeof domains.temporal === 'number' ? domains.temporal + '%' : escapeHtml(String(domains.temporal))}</div>
+                        <div class="domain-contribution">${formatContribution(domains.temporal, 0.3)}</div>
                     </div>`;
                 }
                 if (domains.noise !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🎯 Interaction Noise (25%)</div>
-                        <div class="domain-score">${domains.noise}%</div>
-                        <div class="domain-contribution">Contribution: ${(domains.noise * 0.25).toFixed(1)}%</div>
+                        <div class="domain-score">${typeof domains.noise === 'number' ? domains.noise + '%' : escapeHtml(String(domains.noise))}</div>
+                        <div class="domain-contribution">${formatContribution(domains.noise, 0.25)}</div>
                     </div>`;
                 }
                 if (domains.semantics !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🎨 UI Semantics (25%)</div>
-                        <div class="domain-score">${domains.semantics}%</div>
-                        <div class="domain-contribution">Contribution: ${(domains.semantics * 0.25).toFixed(1)}%</div>
+                        <div class="domain-score">${typeof domains.semantics === 'number' ? domains.semantics + '%' : escapeHtml(String(domains.semantics))}</div>
+                        <div class="domain-contribution">${formatContribution(domains.semantics, 0.25)}</div>
                     </div>`;
                 }
                 if (domains.continuity !== undefined) {
                     html += `<div class="domain-card">
                         <div class="domain-name">🔄 Session Continuity (20%)</div>
-                        <div class="domain-score">${domains.continuity}%</div>
-                        <div class="domain-contribution">Contribution: ${(domains.continuity * 0.2).toFixed(1)}%</div>
+                        <div class="domain-score">${typeof domains.continuity === 'number' ? domains.continuity + '%' : escapeHtml(String(domains.continuity))}</div>
+                        <div class="domain-contribution">${formatContribution(domains.continuity, 0.2)}</div>
                     </div>`;
                 }
                 html += '</div>';
