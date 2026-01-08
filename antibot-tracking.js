@@ -7,10 +7,180 @@
  * 2. Interaction Noise - Monitor errors, hesitations, cancellations
  * 3. UI Semantics - Observe interaction with visual elements
  * 4. Session Continuity - Track navigation patterns
+ * 5. Automation Detection - Selenium, WebDriver, Headless browsers
  */
 
 (function() {
     'use strict';
+    
+    // ============================================
+    // ADVANCED BOT DETECTION - Selenium/WebDriver
+    // ============================================
+    function detectAutomation() {
+        const flags = [];
+        
+        // 1. Check for navigator.webdriver (Selenium/WebDriver)
+        if (navigator.webdriver === true) {
+            flags.push('webdriver_detected');
+        }
+        
+        // 2. Check for automation-related window properties
+        const automationProperties = [
+            '__webdriver_evaluate',
+            '__selenium_evaluate',
+            '__webdriver_script_function',
+            '__webdriver_script_func',
+            '__webdriver_script_fn',
+            '__fxdriver_evaluate',
+            '__driver_unwrapped',
+            '__webdriver_unwrapped',
+            '__driver_evaluate',
+            '__selenium_unwrapped',
+            '__fxdriver_unwrapped',
+            '_Selenium_IDE_Recorder',
+            '_selenium',
+            'calledSelenium',
+            '$cdc_asdjflasutopfhvcZLmcfl_',
+            '$chrome_asyncScriptInfo',
+            '__$webdriverAsyncExecutor',
+            'webdriver',
+            '__webdriverFunc',
+            'domAutomation',
+            'domAutomationController'
+        ];
+        
+        for (const prop of automationProperties) {
+            if (window[prop] || document[prop]) {
+                flags.push('automation_property_' + prop);
+            }
+        }
+        
+        // 3. Check for Chrome DevTools Protocol
+        if (window.chrome && window.chrome.runtime) {
+            try {
+                if (window.chrome.runtime.id) {
+                    // Extension detected - could be legitimate
+                } else if (window.chrome.app) {
+                    flags.push('chrome_app_detected');
+                }
+            } catch (e) {
+                flags.push('chrome_runtime_access_error');
+            }
+        }
+        
+        // 4. Check for missing browser features (headless)
+        const headlessChecks = {
+            hasPlugins: navigator.plugins.length === 0,
+            hasLanguages: !navigator.languages || navigator.languages.length === 0,
+            hasChrome: !window.chrome && /Chrome/.test(navigator.userAgent),
+            hasMimeTypes: navigator.mimeTypes.length === 0,
+            hasNotifications: !('Notification' in window),
+            hasPermissions: !('permissions' in navigator)
+        };
+        
+        let headlessScore = 0;
+        for (const [check, result] of Object.entries(headlessChecks)) {
+            if (result) {
+                headlessScore++;
+                flags.push('headless_' + check);
+            }
+        }
+        
+        // 5. Check for phantom/headless browser UA
+        const ua = navigator.userAgent.toLowerCase();
+        const suspiciousUA = ['headless', 'phantom', 'puppeteer', 'playwright', 'selenium'];
+        for (const suspect of suspiciousUA) {
+            if (ua.includes(suspect)) {
+                flags.push('suspicious_ua_' + suspect);
+            }
+        }
+        
+        // 6. WebGL/Canvas fingerprinting check
+        try {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (gl) {
+                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                if (debugInfo) {
+                    const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                    const vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+                    
+                    // Check for headless/automation patterns
+                    if (renderer.includes('SwiftShader') || 
+                        renderer.includes('llvmpipe') ||
+                        vendor.includes('Google')) {
+                        flags.push('webgl_software_renderer');
+                    }
+                }
+            } else {
+                flags.push('webgl_unavailable');
+            }
+        } catch (e) {
+            flags.push('webgl_error');
+        }
+        
+        // 7. Check for inconsistent window properties
+        if (window.outerWidth === 0 && window.outerHeight === 0) {
+            flags.push('zero_outer_dimensions');
+        }
+        
+        // 8. Check for CDP (Chrome DevTools Protocol) indicators
+        if (typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Array !== 'undefined' ||
+            typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Promise !== 'undefined' ||
+            typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol !== 'undefined') {
+            flags.push('cdp_detected');
+        }
+        
+        // 9. Check for automated mouse movements
+        let mouseEventCount = 0;
+        let mouseEventTimestamp = Date.now();
+        document.addEventListener('mousemove', function() {
+            mouseEventCount++;
+            const now = Date.now();
+            if (now - mouseEventTimestamp < 10 && mouseEventCount > 50) {
+                flags.push('synthetic_mouse_events');
+            }
+            mouseEventTimestamp = now;
+        }, {once: true, passive: true});
+        
+        // 10. Permission API inconsistencies
+        if ('permissions' in navigator) {
+            try {
+                navigator.permissions.query({name: 'notifications'}).then(function(result) {
+                    if (result.state === 'prompt' && typeof Notification === 'undefined') {
+                        flags.push('permission_api_inconsistent');
+                    }
+                });
+            } catch (e) {
+                // Permission query failed
+            }
+        }
+        
+        return {
+            isAutomated: flags.length > 0,
+            flags: flags,
+            score: Math.min(flags.length * 10, 100),
+            headlessScore: headlessScore
+        };
+    }
+    
+    // Run automation detection immediately
+    const automationDetection = detectAutomation();
+    if (automationDetection.isAutomated) {
+        console.warn('[Anti-Bot] Automation detected:', automationDetection.flags);
+        
+        // Send automation detection immediately to server
+        try {
+            navigator.sendBeacon('/antibot-report.php', JSON.stringify({
+                type: 'automation_detected',
+                flags: automationDetection.flags,
+                score: automationDetection.score,
+                timestamp: Date.now()
+            }));
+        } catch (e) {
+            // Beacon failed
+        }
+    }
     
     // Configuration constants
     const ACTIONS_THRESHOLD = 10;           // Send data after this many actions

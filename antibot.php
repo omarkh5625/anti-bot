@@ -4,6 +4,32 @@ $uri = $_SERVER['REQUEST_URI'] ?? '';
 $basename = basename(parse_url($uri, PHP_URL_PATH));
 $is_js_fetch = isset($_SERVER['HTTP_SEC_FETCH_MODE']) && $_SERVER['HTTP_SEC_FETCH_MODE'] === 'cors';
 
+// ✅ Handle automation detection reports from frontend
+if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $data = file_get_contents('php://input');
+    $report = json_decode($data, true);
+    
+    if ($report && isset($report['type']) && $report['type'] === 'automation_detected') {
+        $log_dir = __DIR__ . '/logs';
+        if (!is_dir($log_dir)) {
+            @mkdir($log_dir, 0755, true);
+        }
+        
+        $log_entry = date('Y-m-d H:i:s') . ' | AUTOMATION DETECTED | IP: ' . 
+                     ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . 
+                     ' | Flags: ' . implode(', ', $report['flags'] ?? []) . 
+                     ' | Score: ' . ($report['score'] ?? 0) . "\n";
+        
+        file_put_contents($log_dir . '/automation.log', $log_entry, FILE_APPEND);
+        
+        // Block this IP immediately
+        http_response_code(403);
+        header('Location: https://www.google.com');
+        exit;
+    }
+    exit;
+}
+
 // ✅ استثناء كامل لمكالمات fetch()
 if (
     in_array($basename, ['start_session.php', 'render.php']) &&
@@ -569,21 +595,82 @@ function is_advanced_bot($ip, $ua) {
     if (isset($_COOKIE['js_verified']) && $_COOKIE['js_verified'] === 'yes') {
         return false;
     }
-    if (preg_match('/HeadlessChrome|Puppeteer|Playwright/i', $ua)) {
+    
+    // 1. Headless browser detection
+    if (preg_match('/HeadlessChrome|Puppeteer|Playwright|PhantomJS/i', $ua)) {
         return 'Headless browser';
     }
+    
+    // 2. Selenium/WebDriver detection
+    if (preg_match('/selenium|webdriver|bot|crawler|spider/i', $ua)) {
+        return 'Selenium/WebDriver detected';
+    }
+    
+    // 3. Check for automation headers
+    $automation_headers = [
+        'HTTP_X_REQUESTED_WITH' => 'XMLHttpRequest',
+        'HTTP_X_AUTOMATION' => true,
+        'HTTP_CHROME_AUTOMATION' => true
+    ];
+    
+    foreach ($automation_headers as $header => $value) {
+        if (isset($_SERVER[$header])) {
+            if ($value === true || $_SERVER[$header] === $value) {
+                return 'Automation headers detected';
+            }
+        }
+    }
+    
+    // 4. Fake Chrome UA without proper headers
     if (stripos($ua, 'Chrome') !== false && (
         empty($_SERVER['HTTP_SEC_CH_UA']) ||
         empty($_SERVER['HTTP_SEC_FETCH_SITE'])
     )) {
         return 'Fake Chrome UA';
     }
+    
+    // 5. Missing Accept-Language (common in bots)
+    if (empty($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
+        return 'Missing Accept-Language header';
+    }
+    
+    // 6. Suspicious Accept-Language values
+    $accept_lang = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '';
+    if ($accept_lang === 'en-US' || $accept_lang === 'en') {
+        // Too simple - real browsers send more complex Accept-Language
+        return 'Suspicious Accept-Language';
+    }
+    
+    // 7. Check for CDP (Chrome DevTools Protocol) indicators in headers
+    if (!empty($_SERVER['HTTP_USER_AGENT']) && 
+        strpos($_SERVER['HTTP_USER_AGENT'], 'HeadlessChrome') !== false) {
+        return 'CDP/HeadlessChrome detected';
+    }
+    
+    // 8. Check for missing or suspicious connection headers
+    if (empty($_SERVER['HTTP_CONNECTION'])) {
+        return 'Missing Connection header';
+    }
+    
+    // 9. Bot IP ranges (Google, Microsoft, etc.)
     $known_ranges = ['64.233.', '66.102.', '66.249.', '157.55.', '167.89.'];
     foreach ($known_ranges as $prefix) {
         if (str_starts_with($ip, $prefix)) {
             return 'Bot IP Range';
         }
     }
+    
+    // 10. Check for too-fast requests (< 100ms between requests)
+    static $last_request_time = [];
+    $current_time = microtime(true);
+    if (isset($last_request_time[$ip])) {
+        $time_diff = ($current_time - $last_request_time[$ip]) * 1000; // Convert to ms
+        if ($time_diff < 100) {
+            return 'Too-fast requests (bot-like)';
+        }
+    }
+    $last_request_time[$ip] = $current_time;
+    
     return false;
 }
 
