@@ -505,8 +505,69 @@ function generate_ja3_fingerprint() {
 }
 
 /**
+ * Track cumulative JA3 reuse across sessions (Silent Risk)
+ * Detects if same JA3 is used by many different sessions
+ */
+function track_ja3_cumulative_reuse($ja3) {
+    global $config;
+    
+    if (!($config['tls_fingerprinting']['track_cumulative_reuse'] ?? false)) {
+        return;
+    }
+    
+    $ja3_tracking_file = __DIR__ . '/ja3_tracking.json';
+    $ja3_data = [];
+    
+    if (file_exists($ja3_tracking_file)) {
+        $ja3_data = json_decode(file_get_contents($ja3_tracking_file), true) ?: [];
+    }
+    
+    if (!isset($ja3_data[$ja3])) {
+        $ja3_data[$ja3] = [
+            'first_seen' => time(),
+            'session_count' => 0,
+            'ip_addresses' => []
+        ];
+    }
+    
+    $ja3_data[$ja3]['session_count']++;
+    $ja3_data[$ja3]['last_seen'] = time();
+    
+    // Track unique IPs using this JA3
+    $client_ip = get_client_ip();
+    if (!in_array($client_ip, $ja3_data[$ja3]['ip_addresses'])) {
+        $ja3_data[$ja3]['ip_addresses'][] = $client_ip;
+    }
+    
+    // Cleanup old entries (older than 7 days)
+    $cutoff = time() - (7 * 86400);
+    foreach ($ja3_data as $ja3_hash => $data) {
+        if (($data['last_seen'] ?? 0) < $cutoff) {
+            unset($ja3_data[$ja3_hash]);
+        }
+    }
+    
+    file_put_contents($ja3_tracking_file, json_encode($ja3_data, JSON_PRETTY_PRINT));
+    
+    // Log if threshold exceeded (Silent Risk)
+    $threshold = $config['tls_fingerprinting']['cumulative_reuse_threshold'] ?? 10;
+    if ($ja3_data[$ja3]['session_count'] >= $threshold) {
+        if (is_dir(__DIR__ . '/logs')) {
+            file_put_contents(
+                __DIR__ . '/logs/security.log',
+                date('Y-m-d H:i:s') . " | JA3_CUMULATIVE_RISK | JA3: " . substr($ja3, 0, 16) . 
+                "... | Sessions: " . $ja3_data[$ja3]['session_count'] . 
+                " | Unique IPs: " . count($ja3_data[$ja3]['ip_addresses']) . "\n",
+                FILE_APPEND
+            );
+        }
+    }
+}
+
+/**
  * Verify JA3 fingerprint match for session
  * Detects if TLS fingerprint changed (session hijacking indicator)
+ * TERMINATES SESSION SILENTLY on mismatch if configured
  */
 function verify_ja3_match($ip, $stored_fingerprint_data) {
     global $config;
@@ -522,6 +583,9 @@ function verify_ja3_match($ip, $stored_fingerprint_data) {
         return true; // Can't verify, allow
     }
     
+    // Track cumulative JA3 reuse
+    track_ja3_cumulative_reuse($current_ja3);
+    
     // Check if stored fingerprint has JA3 data
     if (!isset($stored_fingerprint_data['ja3'])) {
         return true; // First time, no comparison possible
@@ -531,7 +595,7 @@ function verify_ja3_match($ip, $stored_fingerprint_data) {
     
     // Compare JA3 fingerprints
     if ($current_ja3 !== $stored_ja3) {
-        // JA3 mismatch detected - possible session hijacking or different client
+        // JA3 mismatch detected - possible Playwright Stealth or automation
         
         // Log this security event
         if (is_dir(__DIR__ . '/logs')) {
@@ -542,6 +606,20 @@ function verify_ja3_match($ip, $stored_fingerprint_data) {
                 "Current: " . substr($current_ja3, 0, 16) . "...\n",
                 FILE_APPEND
             );
+        }
+        
+        // MANDATORY: Terminate signature immediately if configured
+        if ($config['tls_fingerprinting']['terminate_on_change'] ?? true) {
+            // Clear all verification cookies silently
+            setcookie('fp_hash', '', time() - 3600, '/');
+            setcookie('js_verified', '', time() - 3600, '/');
+            setcookie('analysis_done', '', time() - 3600, '/');
+            setcookie('behavior_verified', '', time() - 3600, '/');
+            
+            // End session silently - no explicit messages
+            // Redirect to a neutral page or show loading indefinitely
+            http_response_code(403);
+            exit; // Silent termination
         }
         
         return false; // Mismatch
@@ -1056,7 +1134,9 @@ function analyze_mouse_movements($ip) {
 
 /**
  * Detect idealized/perfect behavior patterns
- * Humans make mistakes and show variance - bots don't
+ * PHILOSOPHY: Humans are noisy; bots are perfect. REJECT PERFECTION.
+ * Always punish: excessive consistency, lack of hesitation, uniform responses
+ * Automatically increase risk score even with clean IPs
  */
 function detect_idealized_behavior($ip) {
     global $config;
@@ -1072,7 +1152,7 @@ function detect_idealized_behavior($ip) {
     
     $all_sessions = $behaviors[$ip]['sessions'];
     
-    // 1. Check for perfect timing (zero variance)
+    // 1. Check for perfect timing (zero variance) - HUMANS ARE NOISY
     $all_intervals = [];
     foreach ($all_sessions as $session) {
         if (isset($session['actions']) && count($session['actions']) > 2) {
@@ -1097,15 +1177,19 @@ function detect_idealized_behavior($ip) {
         
         $perfect_timing_threshold = $idealized_config['perfect_timing_threshold'] ?? 0.15;
         if ($cv < $perfect_timing_threshold) {
-            $penalty = $idealized_config['identical_path_penalty'] ?? 50;
+            $penalty = $idealized_config['excessive_consistency_penalty'] ?? 55;
             $score += $penalty;
-            $reasons[] = 'Perfect timing intervals (mathematical precision, no human variance)';
+            $reasons[] = sprintf(
+                'Perfect timing intervals (CV: %.3f, mathematical precision, no human variance) - HUMANS ARE NOISY',
+                $cv
+            );
         }
     }
     
-    // 2. Check for zero errors across all sessions
+    // 2. Check for zero errors across all sessions - BOTS ARE PERFECT
     $total_actions = 0;
     $error_actions = 0;
+    $correction_actions = 0;
     foreach ($all_sessions as $session) {
         if (isset($session['actions'])) {
             foreach ($session['actions'] as $action) {
@@ -1114,17 +1198,46 @@ function detect_idealized_behavior($ip) {
                     isset($action['data']['input_error']) && $action['data']['input_error']) {
                     $error_actions++;
                 }
+                if ($action['action'] === 'keystroke' && isset($action['data']['correction']) && $action['data']['correction']) {
+                    $correction_actions++;
+                }
             }
         }
     }
     
-    if ($total_actions > 20 && $error_actions === 0) {
-        $penalty = $idealized_config['zero_error_penalty'] ?? 40;
+    if ($total_actions > 20 && $error_actions === 0 && $correction_actions === 0) {
+        $penalty = $idealized_config['zero_error_penalty'] ?? 50;
         $score += $penalty;
-        $reasons[] = 'Zero errors in ' . $total_actions . ' actions (inhuman perfection)';
+        $reasons[] = sprintf(
+            'Zero errors in %d actions (inhuman perfection) - REJECT PERFECTION',
+            $total_actions
+        );
     }
     
-    // 3. Check for identical navigation paths
+    // 3. Check for lack of hesitation - HUMANS HESITATE
+    $hesitation_count = 0;
+    foreach ($all_sessions as $session) {
+        if (isset($session['actions']) && count($session['actions']) > 3) {
+            for ($i = 1; $i < count($session['actions']); $i++) {
+                $interval = $session['actions'][$i]['timestamp'] - $session['actions'][$i-1]['timestamp'];
+                // Hesitation = pause > 500ms between actions
+                if ($interval > 500) {
+                    $hesitation_count++;
+                }
+            }
+        }
+    }
+    
+    if ($total_actions > 10 && $hesitation_count === 0) {
+        $penalty = $idealized_config['no_hesitation_penalty'] ?? 45;
+        $score += $penalty;
+        $reasons[] = sprintf(
+            'No hesitation detected in %d actions (no human pauses) - HUMANS HESITATE',
+            $total_actions
+        );
+    }
+    
+    // 4. Check for identical navigation paths - HUMANS VARY
     $nav_paths = [];
     foreach ($all_sessions as $session) {
         $path = [];
@@ -1144,13 +1257,44 @@ function detect_idealized_behavior($ip) {
         $unique_paths = count(array_unique($nav_paths));
         if ($unique_paths === 1) {
             // All paths identical
-            $penalty = $idealized_config['identical_path_penalty'] ?? 50;
+            $penalty = $idealized_config['identical_path_penalty'] ?? 60;
             $score += $penalty;
-            $reasons[] = 'Identical navigation path repeated across all sessions';
+            $reasons[] = 'Identical navigation path repeated across all sessions - HUMANS VARY';
         }
     }
     
-    // 4. Check for reused fingerprints across sessions
+    // 5. Check for uniform response times - HUMANS VARY RESPONSES
+    $response_times = [];
+    foreach ($all_sessions as $session) {
+        if (isset($session['actions']) && count($session['actions']) > 1) {
+            $first_action = $session['actions'][0]['timestamp'] ?? 0;
+            $last_action = end($session['actions'])['timestamp'] ?? 0;
+            if ($last_action > $first_action) {
+                $response_times[] = $last_action - $first_action;
+            }
+        }
+    }
+    
+    if (count($response_times) >= 3) {
+        $avg_response = array_sum($response_times) / count($response_times);
+        $variance = 0;
+        foreach ($response_times as $time) {
+            $variance += pow($time - $avg_response, 2);
+        }
+        $variance = $variance / count($response_times);
+        $cv = $avg_response > 0 ? (sqrt($variance) / $avg_response) : 0;
+        
+        if ($cv < 0.2) {
+            $penalty = $idealized_config['uniform_response_penalty'] ?? 40;
+            $score += $penalty;
+            $reasons[] = sprintf(
+                'Uniform response times across sessions (CV: %.3f) - HUMANS VARY RESPONSES',
+                $cv
+            );
+        }
+    }
+    
+    // 6. Check for reused fingerprints across sessions - REPLAY ATTACK
     $fps = load_fingerprints();
     $fp_history = [];
     foreach ($fps as $ip_key => $fp_data) {
@@ -1163,10 +1307,19 @@ function detect_idealized_behavior($ip) {
     if (count($fp_history) > 1) {
         $unique_fps = count(array_unique($fp_history));
         if ($unique_fps === 1 && count($fp_history) >= 3) {
-            $penalty = $idealized_config['identical_fingerprint_penalty'] ?? 60;
+            $penalty = $idealized_config['identical_fingerprint_penalty'] ?? 70;
             $score += $penalty;
-            $reasons[] = 'Identical fingerprint reused ' . count($fp_history) . ' times (replay attack)';
+            $reasons[] = sprintf(
+                'Identical fingerprint reused %d times (replay attack) - REJECT PERFECTION',
+                count($fp_history)
+            );
         }
+    }
+    
+    // 7. Check for excessive consistency even with clean IPs
+    // This ensures clean IPs don't bypass perfection detection
+    if ($score > 0) {
+        $reasons[] = 'Risk increased regardless of IP reputation (perfection detected)';
     }
     
     return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
@@ -1220,6 +1373,184 @@ function analyze_session_continuity($ip) {
             $reasons[] = 'Suspicious session timing, missing resume logic';
             break;
         }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+/**
+ * Analyze timing entropy across multiple sessions (Entropy Memory)
+ * Stores and compares average time variance per fingerprint
+ * Detects automation through consistent timing with minimal variation
+ * NO reliance on mouse or buttons - purely time and physics
+ */
+function analyze_timing_entropy_memory($ip) {
+    global $config;
+    
+    $entropy_config = $config['entropy_memory'] ?? [];
+    if (!($entropy_config['enabled'] ?? true)) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    
+    // Load entropy memory storage
+    $entropy_file = __DIR__ . '/entropy_memory.json';
+    $entropy_data = [];
+    if (file_exists($entropy_file)) {
+        $entropy_data = json_decode(file_get_contents($entropy_file), true) ?: [];
+    }
+    
+    // Get current behavior data
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $all_sessions = $behaviors[$ip]['sessions'];
+    $min_sessions = $entropy_config['min_sessions_for_comparison'] ?? 2;
+    
+    if (count($all_sessions) < $min_sessions) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    // Calculate timing statistics for each session
+    $session_stats = [];
+    foreach ($all_sessions as $session_id => $session) {
+        if (!isset($session['actions']) || count($session['actions']) < 3) {
+            continue;
+        }
+        
+        $intervals = [];
+        for ($i = 1; $i < count($session['actions']); $i++) {
+            $interval = $session['actions'][$i]['timestamp'] - $session['actions'][$i-1]['timestamp'];
+            $intervals[] = $interval;
+        }
+        
+        if (empty($intervals)) {
+            continue;
+        }
+        
+        $avg_interval = array_sum($intervals) / count($intervals);
+        $variance = 0;
+        foreach ($intervals as $interval) {
+            $variance += pow($interval - $avg_interval, 2);
+        }
+        $variance = $variance / count($intervals);
+        $std_dev = sqrt($variance);
+        
+        // Coefficient of variation (CV) - normalized measure of dispersion
+        $cv = $avg_interval > 0 ? ($std_dev / $avg_interval) : 0;
+        
+        $session_stats[] = [
+            'session_id' => $session_id,
+            'avg_interval' => $avg_interval,
+            'std_dev' => $std_dev,
+            'cv' => $cv,
+            'intervals' => $intervals
+        ];
+    }
+    
+    if (count($session_stats) < $min_sessions) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    // Store entropy memory for this IP
+    if (!isset($entropy_data[$ip])) {
+        $entropy_data[$ip] = [
+            'first_seen' => time(),
+            'sessions' => []
+        ];
+    }
+    
+    foreach ($session_stats as $stats) {
+        $entropy_data[$ip]['sessions'][$stats['session_id']] = [
+            'timestamp' => time(),
+            'avg_interval' => $stats['avg_interval'],
+            'std_dev' => $stats['std_dev'],
+            'cv' => $stats['cv']
+        ];
+    }
+    
+    $entropy_data[$ip]['last_updated'] = time();
+    
+    // Cleanup old entropy data (older than 7 days)
+    $cutoff = time() - (7 * 86400);
+    foreach ($entropy_data as $ip_key => $data) {
+        if (($data['last_updated'] ?? 0) < $cutoff) {
+            unset($entropy_data[$ip_key]);
+        }
+    }
+    
+    file_put_contents($entropy_file, json_encode($entropy_data, JSON_PRETTY_PRINT));
+    
+    // CROSS-SESSION ANALYSIS: Compare timing patterns across sessions
+    $all_cvs = array_column($session_stats, 'cv');
+    $all_avg_intervals = array_column($session_stats, 'avg_interval');
+    
+    // Calculate consistency across sessions
+    $cv_variance = 0;
+    $avg_cv = array_sum($all_cvs) / count($all_cvs);
+    foreach ($all_cvs as $cv) {
+        $cv_variance += pow($cv - $avg_cv, 2);
+    }
+    $cv_variance = $cv_variance / count($all_cvs);
+    
+    // Calculate interval consistency
+    $interval_variance = 0;
+    $avg_of_avgs = array_sum($all_avg_intervals) / count($all_avg_intervals);
+    foreach ($all_avg_intervals as $avg) {
+        $interval_variance += pow($avg - $avg_of_avgs, 2);
+    }
+    $interval_variance = $interval_variance / count($all_avg_intervals);
+    $interval_cv = $avg_of_avgs > 0 ? (sqrt($interval_variance) / $avg_of_avgs) : 0;
+    
+    // DETECTION RULE: Consistent timing with minimal variation = Automation
+    $consistency_threshold = $entropy_config['consistency_threshold'] ?? 0.1;
+    
+    if ($avg_cv < $consistency_threshold) {
+        $penalty = $entropy_config['variance_penalty'] ?? 45;
+        $score += $penalty;
+        $reasons[] = sprintf(
+            'Consistent timing with minimal variation across sessions (CV: %.3f < %.3f threshold)',
+            $avg_cv,
+            $consistency_threshold
+        );
+    }
+    
+    // Check if timing is too consistent across sessions
+    if ($interval_cv < 0.15 && count($session_stats) >= 3) {
+        $score += 40;
+        $reasons[] = sprintf(
+            'Near-identical timing patterns across %d sessions (interval CV: %.3f)',
+            count($session_stats),
+            $interval_cv
+        );
+    }
+    
+    // Check for mathematical precision (all intervals within 5% of mean)
+    $precision_count = 0;
+    foreach ($session_stats as $stats) {
+        $within_precision = true;
+        foreach ($stats['intervals'] as $interval) {
+            $deviation_pct = abs($interval - $stats['avg_interval']) / $stats['avg_interval'];
+            if ($deviation_pct > 0.05) {
+                $within_precision = false;
+                break;
+            }
+        }
+        if ($within_precision && count($stats['intervals']) >= 3) {
+            $precision_count++;
+        }
+    }
+    
+    if ($precision_count >= 2) {
+        $score += 50;
+        $reasons[] = sprintf(
+            'Mathematical precision detected in %d sessions (all intervals within 5%% of mean)',
+            $precision_count
+        );
     }
     
     return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
@@ -1374,6 +1705,7 @@ function calculate_bot_confidence($ip) {
     $mouse = analyze_mouse_movements($ip);
     $idealized = detect_idealized_behavior($ip);
     $drift = detect_behavioral_drift($ip);
+    $entropy_memory = analyze_timing_entropy_memory($ip); // NEW: Cross-session entropy analysis
     
     // ============================================
     // DYNAMIC WEIGHTS WITH RANDOMIZATION
@@ -1381,13 +1713,14 @@ function calculate_bot_confidence($ip) {
     
     // Base weights for each domain
     $base_weights = [
-        'temporal' => 0.18,
-        'noise' => 0.13,
-        'semantics' => 0.13,
-        'continuity' => 0.13,
-        'mouse' => 0.18,
-        'idealized' => 0.13,
-        'drift' => 0.12
+        'temporal' => 0.15,
+        'noise' => 0.11,
+        'semantics' => 0.11,
+        'continuity' => 0.11,
+        'mouse' => 0.15,
+        'idealized' => 0.15,
+        'drift' => 0.10,
+        'entropy_memory' => 0.12 // NEW: Entropy memory analysis
     ];
     
     // Apply randomization to prevent reverse engineering
@@ -1441,6 +1774,7 @@ function calculate_bot_confidence($ip) {
     $mouse_adjusted = $apply_nonlinear($mouse['score']);
     $idealized_adjusted = $apply_nonlinear($idealized['score']);
     $drift_adjusted = $apply_nonlinear($drift['score']);
+    $entropy_adjusted = $apply_nonlinear($entropy_memory['score']); // NEW
     
     // Weighted average with dynamic weights
     $total_score = (
@@ -1450,7 +1784,8 @@ function calculate_bot_confidence($ip) {
         $continuity_adjusted * $weights['continuity'] +
         $mouse_adjusted * $weights['mouse'] +
         $idealized_adjusted * $weights['idealized'] +
-        $drift_adjusted * $weights['drift']
+        $drift_adjusted * $weights['drift'] +
+        $entropy_adjusted * $weights['entropy_memory'] // NEW
     );
     
     // Apply final non-linear transformation to total
@@ -1479,7 +1814,8 @@ function calculate_bot_confidence($ip) {
         $continuity['reasons'],
         $mouse['reasons'],
         $idealized['reasons'],
-        $drift['reasons']
+        $drift['reasons'],
+        $entropy_memory['reasons'] // NEW
     );
     
     // ============================================
@@ -1501,7 +1837,8 @@ function calculate_bot_confidence($ip) {
             'continuity' => $continuity['score'],
             'mouse' => $mouse['score'],
             'idealized' => $idealized['score'],
-            'drift' => $drift['score']
+            'drift' => $drift['score'],
+            'entropy_memory' => $entropy_memory['score'] // NEW
         ],
         'adjusted_scores' => $silent_scoring ? 'hidden' : [
             'temporal' => $temporal_adjusted,
@@ -1510,7 +1847,8 @@ function calculate_bot_confidence($ip) {
             'continuity' => $continuity_adjusted,
             'mouse' => $mouse_adjusted,
             'idealized' => $idealized_adjusted,
-            'drift' => $drift_adjusted
+            'drift' => $drift_adjusted,
+            'entropy_memory' => $entropy_adjusted // NEW
         ],
         'weights_used' => $silent_scoring ? 'hidden' : $weights,
         'thresholds_used' => $silent_scoring ? 'hidden' : [

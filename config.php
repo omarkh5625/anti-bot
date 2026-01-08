@@ -67,9 +67,12 @@ return [
 
     'idealized_behavior' => [
         'perfect_timing_threshold' => 0.15,
-        'zero_error_penalty' => 40,
-        'identical_path_penalty' => 50,
-        'identical_fingerprint_penalty' => 60,
+        'zero_error_penalty' => 50, // Increased: humans make mistakes
+        'identical_path_penalty' => 60, // Increased: humans vary
+        'identical_fingerprint_penalty' => 70, // Increased: replay detection
+        'no_hesitation_penalty' => 45, // NEW: humans hesitate
+        'uniform_response_penalty' => 40, // NEW: humans vary responses
+        'excessive_consistency_penalty' => 55, // NEW: bots are perfect
     ],
 
     // ============================================
@@ -80,7 +83,7 @@ return [
     'session_max_age' => 86400,
 
     'enforce_subnet_binding' => true,
-    'enforce_tls_binding' => false,
+    'enforce_tls_binding' => true, // Mandatory TLS/JA3 fingerprinting
     'enforce_ua_binding' => false,
 
     // ============================================
@@ -124,6 +127,9 @@ return [
         'ja3_mismatch_penalty' => 100,
         'track_cipher_suites' => true,
         'track_header_order' => true,
+        'terminate_on_change' => true, // Silent termination on JA3 change
+        'track_cumulative_reuse' => true, // Track JA3 reuse across sessions
+        'cumulative_reuse_threshold' => 10, // Flag after 10+ sessions with same JA3
     ],
 
     // ============================================
@@ -157,6 +163,17 @@ return [
     'min_timing_entropy' => 0.2,
     'min_navigation_entropy' => 0.3,
     'min_interaction_entropy' => 0.25,
+    
+    // Entropy Memory (Time-Based Cross-Session Analysis)
+    'entropy_memory' => [
+        'enabled' => true,
+        'store_timing_variance' => true,
+        'store_deviation_per_fingerprint' => true,
+        'compare_across_sessions' => true,
+        'consistency_threshold' => 0.1, // CV < 0.1 = automation
+        'min_sessions_for_comparison' => 2,
+        'variance_penalty' => 45, // Penalty for low variance
+    ],
 
     'drift_detection' => [
         'enabled' => true,
