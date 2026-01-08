@@ -416,7 +416,12 @@ function calculate_header_entropy() {
         'HTTP_SEC_CH_UA_PLATFORM',
         'HTTP_SEC_FETCH_SITE',
         'HTTP_SEC_FETCH_MODE',
-        'HTTP_SEC_FETCH_DEST'
+        'HTTP_SEC_FETCH_DEST',
+        'HTTP_SEC_FETCH_USER',
+        'HTTP_UPGRADE_INSECURE_REQUESTS',
+        'HTTP_DNT',
+        'HTTP_CACHE_CONTROL',
+        'HTTP_PRAGMA'
     ];
     
     foreach ($header_keys as $key) {
@@ -428,15 +433,130 @@ function calculate_header_entropy() {
 }
 
 /**
+ * Enhanced JA3-like TLS Fingerprinting
+ * Generates a fingerprint based on TLS client hello and HTTP headers
+ * True JA3 requires SSL/TLS layer access, this is a PHP-level approximation
+ */
+function generate_ja3_fingerprint() {
+    global $config;
+    
+    if (!isset($config['tls_fingerprinting']) || !$config['tls_fingerprinting']['enabled']) {
+        return null;
+    }
+    
+    $components = [];
+    
+    // 1. SSL/TLS Version (if available via server variable)
+    $components[] = $_SERVER['SSL_PROTOCOL'] ?? 'unknown';
+    
+    // 2. Cipher Suite (if available)
+    $components[] = $_SERVER['SSL_CIPHER'] ?? 'unknown';
+    
+    // 3. Header ordering fingerprint (browsers have consistent header order)
+    $header_order = [];
+    $all_headers = getallheaders();
+    if ($all_headers) {
+        foreach (array_keys($all_headers) as $header) {
+            // Normalize header names
+            $header_order[] = strtolower(str_replace('-', '_', $header));
+        }
+    }
+    $components[] = implode(',', $header_order);
+    
+    // 4. Accept header analysis (browsers have distinct Accept patterns)
+    $accept_headers = [
+        $_SERVER['HTTP_ACCEPT'] ?? '',
+        $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '',
+        $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''
+    ];
+    $components[] = implode('|', $accept_headers);
+    
+    // 5. Client hints (Chrome-specific)
+    $client_hints = [
+        $_SERVER['HTTP_SEC_CH_UA'] ?? '',
+        $_SERVER['HTTP_SEC_CH_UA_MOBILE'] ?? '',
+        $_SERVER['HTTP_SEC_CH_UA_PLATFORM'] ?? '',
+        $_SERVER['HTTP_SEC_CH_UA_ARCH'] ?? '',
+        $_SERVER['HTTP_SEC_CH_UA_BITNESS'] ?? '',
+        $_SERVER['HTTP_SEC_CH_UA_MODEL'] ?? ''
+    ];
+    $components[] = implode('|', $client_hints);
+    
+    // 6. Fetch metadata (modern browsers)
+    $fetch_metadata = [
+        $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '',
+        $_SERVER['HTTP_SEC_FETCH_MODE'] ?? '',
+        $_SERVER['HTTP_SEC_FETCH_USER'] ?? '',
+        $_SERVER['HTTP_SEC_FETCH_DEST'] ?? ''
+    ];
+    $components[] = implode('|', $fetch_metadata);
+    
+    // Generate final JA3-like hash
+    return hash('sha256', implode('||', $components));
+}
+
+/**
+ * Verify JA3 fingerprint match for session
+ * Detects if TLS fingerprint changed (session hijacking indicator)
+ */
+function verify_ja3_match($ip, $stored_fingerprint_data) {
+    global $config;
+    
+    if (!isset($config['tls_fingerprinting']) || !$config['tls_fingerprinting']['enabled']) {
+        return true; // Skip if disabled
+    }
+    
+    // Generate current JA3 fingerprint
+    $current_ja3 = generate_ja3_fingerprint();
+    
+    if (!$current_ja3) {
+        return true; // Can't verify, allow
+    }
+    
+    // Check if stored fingerprint has JA3 data
+    if (!isset($stored_fingerprint_data['ja3'])) {
+        return true; // First time, no comparison possible
+    }
+    
+    $stored_ja3 = $stored_fingerprint_data['ja3'];
+    
+    // Compare JA3 fingerprints
+    if ($current_ja3 !== $stored_ja3) {
+        // JA3 mismatch detected - possible session hijacking or different client
+        
+        // Log this security event
+        if (is_dir(__DIR__ . '/logs')) {
+            file_put_contents(
+                __DIR__ . '/logs/security.log',
+                date('Y-m-d H:i:s') . " | JA3_MISMATCH | IP: {$ip} | " .
+                "Stored: " . substr($stored_ja3, 0, 16) . "... | " .
+                "Current: " . substr($current_ja3, 0, 16) . "...\n",
+                FILE_APPEND
+            );
+        }
+        
+        return false; // Mismatch
+    }
+    
+    return true; // Match
+}
+
+/**
  * Verify session-network binding
  * Ensures the session is bound to the same network context
+ * Checks: IP subnet, TLS/JA3 fingerprint, User-Agent hash
  */
 function verify_session_binding($ip, $stored_fingerprint) {
+    global $config;
+    
     // Generate current fingerprint with same session
     $current_fingerprint = generate_dynamic_fingerprint($ip);
     
-    // For session binding, we verify the subnet hasn't changed
+    // For session binding, we verify multiple factors
     $current_subnet = extract_subnet($ip);
+    $current_user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $current_ua_hash = hash('sha256', $current_user_agent);
+    $current_ja3 = generate_ja3_fingerprint();
     
     // Check if stored fingerprint data exists
     $fps = load_fingerprints();
@@ -445,26 +565,66 @@ function verify_session_binding($ip, $stored_fingerprint) {
     }
     
     $stored_data = $fps[$ip];
-    if (isset($stored_data['subnet']) && $stored_data['subnet'] !== $current_subnet) {
-        // Network changed - possible session hijacking
-        return false;
+    $mismatches = [];
+    
+    // 1. Check subnet binding (if enabled)
+    if ($config['enforce_subnet_binding'] ?? true) {
+        if (isset($stored_data['subnet']) && $stored_data['subnet'] !== $current_subnet) {
+            $mismatches[] = 'subnet_changed';
+        }
     }
     
-    return true;
+    // 2. Check TLS/JA3 binding (if enabled)
+    if ($config['enforce_tls_binding'] ?? true) {
+        if (isset($stored_data['ja3']) && $stored_data['ja3'] !== $current_ja3) {
+            $mismatches[] = 'ja3_mismatch';
+        }
+    }
+    
+    // 3. Check User-Agent binding (if enabled)
+    if ($config['enforce_ua_binding'] ?? true) {
+        if (isset($stored_data['user_agent_hash']) && $stored_data['user_agent_hash'] !== $current_ua_hash) {
+            $mismatches[] = 'user_agent_changed';
+        }
+    }
+    
+    // Log mismatches for security monitoring
+    if (!empty($mismatches)) {
+        if (is_dir(__DIR__ . '/logs')) {
+            file_put_contents(
+                __DIR__ . '/logs/security.log',
+                date('Y-m-d H:i:s') . " | SESSION_BINDING_VIOLATION | IP: {$ip} | " .
+                "Mismatches: " . implode(', ', $mismatches) . "\n",
+                FILE_APPEND
+            );
+        }
+        return false; // Binding violated
+    }
+    
+    return true; // All checks passed
 }
 
 function save_fingerprint($ip, $hash, $session_id = null) {
+    global $config;
     $fps = load_fingerprints();
     
     // Store fingerprint with metadata for binding verification
     $subnet = extract_subnet($ip);
+    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $user_agent_hash = hash('sha256', $user_agent);
+    
+    // Generate JA3-like fingerprint
+    $ja3_fingerprint = generate_ja3_fingerprint();
     
     $fps[$ip] = [
         'hash' => $hash,
         'subnet' => $subnet,
         'session_id' => $session_id ?? session_id(),
         'created_at' => time(),
-        'header_entropy' => calculate_header_entropy()
+        'header_entropy' => calculate_header_entropy(),
+        'ja3' => $ja3_fingerprint,
+        'user_agent_hash' => $user_agent_hash,
+        'last_verified' => time()
     ];
     
     file_put_contents(FP_FILE, json_encode($fps, JSON_PRETTY_PRINT));
@@ -1056,6 +1216,144 @@ function analyze_session_continuity($ip) {
     return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
 }
 
+/**
+ * Detect behavioral drift across sessions
+ * Bots tend to have static, unchanging behavior patterns
+ * Humans naturally vary their behavior over time
+ */
+function detect_behavioral_drift($ip) {
+    global $config;
+    
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $drift_config = $config['drift_detection'] ?? [];
+    if (!($drift_config['enabled'] ?? true)) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    $sessions = array_values($behaviors[$ip]['sessions']);
+    
+    $min_sessions = $drift_config['min_sessions_for_drift'] ?? 3;
+    if (count($sessions) < $min_sessions) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    // Calculate behavioral signatures for each session
+    $signatures = [];
+    foreach ($sessions as $session_idx => $session) {
+        if (!isset($session['actions']) || empty($session['actions'])) {
+            continue;
+        }
+        
+        $actions = $session['actions'];
+        $signature = [
+            'action_count' => count($actions),
+            'action_types' => [],
+            'avg_timing' => 0,
+            'timing_variance' => 0
+        ];
+        
+        // Action type distribution
+        $action_type_counts = [];
+        foreach ($actions as $action) {
+            $type = $action['action'] ?? 'unknown';
+            $action_type_counts[$type] = ($action_type_counts[$type] ?? 0) + 1;
+        }
+        $signature['action_types'] = $action_type_counts;
+        
+        // Timing analysis
+        if (count($actions) > 1) {
+            $intervals = [];
+            for ($i = 1; $i < count($actions); $i++) {
+                $interval = $actions[$i]['timestamp'] - $actions[$i-1]['timestamp'];
+                $intervals[] = $interval;
+            }
+            $signature['avg_timing'] = array_sum($intervals) / count($intervals);
+            
+            // Calculate variance
+            $variance = 0;
+            foreach ($intervals as $interval) {
+                $variance += pow($interval - $signature['avg_timing'], 2);
+            }
+            $signature['timing_variance'] = count($intervals) > 0 ? $variance / count($intervals) : 0;
+        }
+        
+        $signatures[] = $signature;
+    }
+    
+    if (count($signatures) < 2) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    // Compare signatures to detect drift
+    $similarity_scores = [];
+    for ($i = 1; $i < count($signatures); $i++) {
+        $sig1 = $signatures[$i-1];
+        $sig2 = $signatures[$i];
+        
+        // Calculate similarity (0 = completely different, 1 = identical)
+        $similarity = 0;
+        $comparisons = 0;
+        
+        // Compare action counts
+        if ($sig1['action_count'] > 0 && $sig2['action_count'] > 0) {
+            $count_ratio = min($sig1['action_count'], $sig2['action_count']) / max($sig1['action_count'], $sig2['action_count']);
+            $similarity += $count_ratio;
+            $comparisons++;
+        }
+        
+        // Compare action type distributions
+        $all_types = array_unique(array_merge(
+            array_keys($sig1['action_types']),
+            array_keys($sig2['action_types'])
+        ));
+        
+        if (!empty($all_types)) {
+            $type_similarity = 0;
+            foreach ($all_types as $type) {
+                $count1 = $sig1['action_types'][$type] ?? 0;
+                $count2 = $sig2['action_types'][$type] ?? 0;
+                if ($count1 + $count2 > 0) {
+                    $type_similarity += min($count1, $count2) / max($count1, $count2);
+                }
+            }
+            $similarity += $type_similarity / count($all_types);
+            $comparisons++;
+        }
+        
+        // Compare timing patterns
+        if ($sig1['avg_timing'] > 0 && $sig2['avg_timing'] > 0) {
+            $timing_ratio = min($sig1['avg_timing'], $sig2['avg_timing']) / max($sig1['avg_timing'], $sig2['avg_timing']);
+            $similarity += $timing_ratio;
+            $comparisons++;
+        }
+        
+        $similarity_scores[] = $comparisons > 0 ? $similarity / $comparisons : 0;
+    }
+    
+    // Calculate average similarity
+    $avg_similarity = count($similarity_scores) > 0 ? array_sum($similarity_scores) / count($similarity_scores) : 0;
+    
+    // Check if behavior is too static (high similarity = low drift = bot)
+    $max_similarity = $drift_config['max_pattern_similarity'] ?? 0.7;
+    if ($avg_similarity > $max_similarity) {
+        $penalty = $drift_config['drift_penalty'] ?? 40;
+        $score += $penalty;
+        $reasons[] = sprintf(
+            'No behavioral drift detected (%.0f%% similarity across %d sessions)',
+            $avg_similarity * 100,
+            count($sessions)
+        );
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
 function calculate_bot_confidence($ip) {
     global $config;
     
@@ -1066,6 +1364,7 @@ function calculate_bot_confidence($ip) {
     $continuity = analyze_session_continuity($ip);
     $mouse = analyze_mouse_movements($ip);
     $idealized = detect_idealized_behavior($ip);
+    $drift = detect_behavioral_drift($ip);
     
     // ============================================
     // DYNAMIC WEIGHTS WITH RANDOMIZATION
@@ -1073,12 +1372,13 @@ function calculate_bot_confidence($ip) {
     
     // Base weights for each domain
     $base_weights = [
-        'temporal' => 0.20,
-        'noise' => 0.15,
-        'semantics' => 0.15,
-        'continuity' => 0.15,
-        'mouse' => 0.20,
-        'idealized' => 0.15
+        'temporal' => 0.18,
+        'noise' => 0.13,
+        'semantics' => 0.13,
+        'continuity' => 0.13,
+        'mouse' => 0.18,
+        'idealized' => 0.13,
+        'drift' => 0.12
     ];
     
     // Apply randomization to prevent reverse engineering
@@ -1131,6 +1431,7 @@ function calculate_bot_confidence($ip) {
     $continuity_adjusted = $apply_nonlinear($continuity['score']);
     $mouse_adjusted = $apply_nonlinear($mouse['score']);
     $idealized_adjusted = $apply_nonlinear($idealized['score']);
+    $drift_adjusted = $apply_nonlinear($drift['score']);
     
     // Weighted average with dynamic weights
     $total_score = (
@@ -1139,7 +1440,8 @@ function calculate_bot_confidence($ip) {
         $semantics_adjusted * $weights['semantics'] +
         $continuity_adjusted * $weights['continuity'] +
         $mouse_adjusted * $weights['mouse'] +
-        $idealized_adjusted * $weights['idealized']
+        $idealized_adjusted * $weights['idealized'] +
+        $drift_adjusted * $weights['drift']
     );
     
     // Apply final non-linear transformation to total
@@ -1167,7 +1469,8 @@ function calculate_bot_confidence($ip) {
         $semantics['reasons'],
         $continuity['reasons'],
         $mouse['reasons'],
-        $idealized['reasons']
+        $idealized['reasons'],
+        $drift['reasons']
     );
     
     // ============================================
@@ -1188,7 +1491,8 @@ function calculate_bot_confidence($ip) {
             'semantics' => $semantics['score'],
             'continuity' => $continuity['score'],
             'mouse' => $mouse['score'],
-            'idealized' => $idealized['score']
+            'idealized' => $idealized['score'],
+            'drift' => $drift['score']
         ],
         'adjusted_scores' => $silent_scoring ? 'hidden' : [
             'temporal' => $temporal_adjusted,
@@ -1196,7 +1500,8 @@ function calculate_bot_confidence($ip) {
             'semantics' => $semantics_adjusted,
             'continuity' => $continuity_adjusted,
             'mouse' => $mouse_adjusted,
-            'idealized' => $idealized_adjusted
+            'idealized' => $idealized_adjusted,
+            'drift' => $drift_adjusted
         ],
         'weights_used' => $silent_scoring ? 'hidden' : $weights,
         'thresholds_used' => $silent_scoring ? 'hidden' : [
