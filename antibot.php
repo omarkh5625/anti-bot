@@ -1501,6 +1501,77 @@ function block_and_exit($client_ip, $user_agent, $reason) {
 $client_ip  = get_client_ip();
 $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
 
+/**
+ * Generate User-Agent hash for tracking and validation
+ * Helps detect bot UA rotation patterns
+ */
+function generate_user_agent_hash($user_agent) {
+    return hash('sha256', $user_agent);
+}
+
+/**
+ * Validate User-Agent hash consistency across sessions
+ * Returns true if UA is consistent, false if suspicious change detected
+ */
+function validate_user_agent_hash($ip, $current_ua) {
+    $ua_hash_file = __DIR__ . '/ua_hashes.json';
+    
+    // Load existing UA hashes
+    $ua_hashes = [];
+    if (file_exists($ua_hash_file)) {
+        $ua_hashes = json_decode(file_get_contents($ua_hash_file), true) ?: [];
+    }
+    
+    $current_hash = generate_user_agent_hash($current_ua);
+    
+    // Check if IP has previous UA hash
+    if (isset($ua_hashes[$ip])) {
+        $stored_data = $ua_hashes[$ip];
+        $stored_hash = $stored_data['hash'] ?? '';
+        $last_seen = $stored_data['timestamp'] ?? 0;
+        
+        // If UA hash changed within short period (< 1 hour), suspicious
+        if ($stored_hash !== $current_hash && (time() - $last_seen) < 3600) {
+            // UA rotated too quickly - likely bot
+            return false;
+        }
+    }
+    
+    // Update or store new hash
+    $ua_hashes[$ip] = [
+        'hash' => $current_hash,
+        'timestamp' => time(),
+        'ua' => substr($current_ua, 0, 200) // Store truncated UA for reference
+    ];
+    
+    // Cleanup old entries (older than 7 days)
+    $cutoff = time() - (7 * 86400);
+    foreach ($ua_hashes as $ip_key => $data) {
+        if (($data['timestamp'] ?? 0) < $cutoff) {
+            unset($ua_hashes[$ip_key]);
+        }
+    }
+    
+    // Save updated hashes
+    file_put_contents($ua_hash_file, json_encode($ua_hashes, JSON_PRETTY_PRINT));
+    
+    return true;
+}
+
+// Validate User-Agent hash for this request
+$ua_hash_valid = validate_user_agent_hash($client_ip, $user_agent);
+if (!$ua_hash_valid) {
+    // Suspicious UA rotation detected
+    file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
+        date("Y-m-d H:i:s") . " | UA_HASH_ROTATION | IP: {$client_ip} | UA: {$user_agent}\n", 
+        FILE_APPEND);
+    
+    // Force re-verification
+    setcookie('fp_hash', '', time() - 3600, '/');
+    setcookie('js_verified', '', time() - 3600, '/');
+    setcookie('analysis_done', '', time() - 3600, '/');
+}
+
 // Session-network binding verification for returning visitors
 if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
     // Check if session needs re-evaluation due to aging or behavioral deviation
@@ -1605,9 +1676,83 @@ function is_advanced_bot($ip, $ua) {
         return false;
     }
     
-    // 1. Headless browser detection
+    // 1. Enhanced Playwright/Puppeteer Stealth Detection
+    // These bots often use stealth plugins that mask basic detection
     if (preg_match('/HeadlessChrome|Puppeteer|Playwright|PhantomJS/i', $ua)) {
         return 'Headless browser';
+    }
+    
+    // Check for Playwright-specific header patterns
+    $playwright_indicators = [
+        // Playwright often has specific sec-ch-ua patterns
+        'HTTP_SEC_CH_UA' => function($value) {
+            return empty($value) || strpos($value, 'Chromium') === false;
+        },
+        // Missing or inconsistent sec-fetch headers
+        'HTTP_SEC_FETCH_MODE' => function($value) {
+            return empty($value);
+        },
+        'HTTP_SEC_FETCH_SITE' => function($value) {
+            return empty($value);
+        }
+    ];
+    
+    $playwright_score = 0;
+    foreach ($playwright_indicators as $header => $check) {
+        if (isset($_SERVER[$header])) {
+            if ($check($_SERVER[$header])) {
+                $playwright_score++;
+            }
+        } elseif ($header === 'HTTP_SEC_CH_UA' && stripos($ua, 'Chrome') !== false) {
+            // Chrome UA but missing sec-ch-ua header
+            $playwright_score++;
+        }
+    }
+    
+    if ($playwright_score >= 2) {
+        return 'Playwright Stealth detected';
+    }
+    
+    // Puppeteer-specific detection patterns
+    $puppeteer_indicators = [
+        // Puppeteer often has perfect viewport dimensions
+        'HTTP_VIEWPORT_WIDTH' => function($value) {
+            return !empty($value) && $value === '1920';
+        },
+        // Check for puppeteer-extra-stealth plugin patterns
+        'HTTP_DNT' => function($value) {
+            // DNT header often missing or set to specific value
+            return $value === '1';
+        }
+    ];
+    
+    $puppeteer_score = 0;
+    foreach ($puppeteer_indicators as $header => $check) {
+        if (isset($_SERVER[$header]) && $check($_SERVER[$header])) {
+            $puppeteer_score++;
+        }
+    }
+    
+    // Check for inconsistent header combinations that indicate stealth plugins
+    if (stripos($ua, 'Chrome') !== false) {
+        $has_sec_ch = isset($_SERVER['HTTP_SEC_CH_UA']);
+        $has_accept_lang = isset($_SERVER['HTTP_ACCEPT_LANGUAGE']);
+        $has_accept_encoding = isset($_SERVER['HTTP_ACCEPT_ENCODING']);
+        
+        // Real Chrome always sends all three
+        if (!$has_sec_ch || !$has_accept_lang || !$has_accept_encoding) {
+            $puppeteer_score++;
+        }
+        
+        // Check for overly simple Accept-Language
+        $accept_lang = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '';
+        if ($accept_lang === 'en-US' || $accept_lang === 'en') {
+            $puppeteer_score++;
+        }
+    }
+    
+    if ($puppeteer_score >= 2) {
+        return 'Puppeteer Stealth detected';
     }
     
     // 2. Selenium/WebDriver detection
@@ -1619,7 +1764,9 @@ function is_advanced_bot($ip, $ua) {
     $automation_headers = [
         'HTTP_X_REQUESTED_WITH' => 'XMLHttpRequest',
         'HTTP_X_AUTOMATION' => true,
-        'HTTP_CHROME_AUTOMATION' => true
+        'HTTP_CHROME_AUTOMATION' => true,
+        'HTTP_X_PLAYWRIGHT' => true,
+        'HTTP_X_PUPPETEER' => true
     ];
     
     foreach ($automation_headers as $header => $value) {
@@ -1630,12 +1777,30 @@ function is_advanced_bot($ip, $ua) {
         }
     }
     
-    // 4. Fake Chrome UA without proper headers
+    // 4. Enhanced Fake Chrome UA detection
     if (stripos($ua, 'Chrome') !== false && (
         empty($_SERVER['HTTP_SEC_CH_UA']) ||
         empty($_SERVER['HTTP_SEC_FETCH_SITE'])
     )) {
-        return 'Fake Chrome UA';
+        // Additional validation: check if other Chrome-specific headers are missing
+        $chrome_headers_present = 0;
+        $expected_chrome_headers = [
+            'HTTP_SEC_FETCH_MODE',
+            'HTTP_SEC_FETCH_DEST',
+            'HTTP_SEC_CH_UA_MOBILE',
+            'HTTP_SEC_CH_UA_PLATFORM'
+        ];
+        
+        foreach ($expected_chrome_headers as $header) {
+            if (isset($_SERVER[$header])) {
+                $chrome_headers_present++;
+            }
+        }
+        
+        // If less than 2 Chrome headers present, likely fake
+        if ($chrome_headers_present < 2) {
+            return 'Fake Chrome UA (stealth bot)';
+        }
     }
     
     // 5. Missing Accept-Language (common in bots)
