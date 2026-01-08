@@ -802,7 +802,17 @@ $recent_attempts = get_recent_attempts(50);
                     <?php foreach ($recent_attempts as $index => $attempt): ?>
                         <tr>
                             <td><?= htmlspecialchars($attempt['timestamp'] ?? 'N/A') ?></td>
-                            <td><code><?= htmlspecialchars($attempt['ip'] ?? 'N/A') ?></code></td>
+                            <td><code><?php
+                                // Handle both 'ip' and 'ip_hash' fields
+                                if (isset($attempt['ip'])) {
+                                    echo htmlspecialchars($attempt['ip']);
+                                } elseif (isset($attempt['ip_hash'])) {
+                                    // Show first 16 chars of hash with indicator
+                                    echo htmlspecialchars(substr($attempt['ip_hash'], 0, 16)) . '... (hashed)';
+                                } else {
+                                    echo 'N/A';
+                                }
+                            ?></code></td>
                             <td>
                                 <?php
                                 $verdict = $attempt['verdict'] ?? 'unknown';
@@ -897,7 +907,10 @@ $recent_attempts = get_recent_attempts(50);
             html += '<div class="details-grid">';
             html += `<div class="detail-item">
                 <div class="detail-label">IP Address</div>
-                <div class="detail-value">${escapeHtml(attempt.ip || 'N/A')}</div>
+                <div class="detail-value">${
+                    attempt.ip ? escapeHtml(attempt.ip) : 
+                    (attempt.ip_hash ? escapeHtml(attempt.ip_hash.substring(0, 16)) + '... (hashed)' : 'N/A')
+                }</div>
             </div>`;
             html += `<div class="detail-item">
                 <div class="detail-label">Time</div>

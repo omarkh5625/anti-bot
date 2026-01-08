@@ -179,9 +179,14 @@ return [
     
     /**
      * Secure logging configuration
+     * 
+     * Note: When hash_fingerprints is enabled, IP addresses are hashed
+     * in access_log.json for privacy. The admin dashboard will show
+     * truncated hash values with "(hashed)" indicator. Full IP addresses
+     * are only stored in security.log for authorized access.
      */
     'logging' => [
-        'hash_fingerprints' => true,         // Hash fingerprints in logs
+        'hash_fingerprints' => true,         // Hash IP addresses and fingerprints in access logs
         'hide_rejection_reasons' => true,    // Hide detailed rejection reasons
         'hide_raw_scores' => true,           // Hide raw bot scores
         'separate_security_logs' => true,    // Use separate security log

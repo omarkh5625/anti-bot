@@ -49,7 +49,9 @@ This is an advanced anti-bot framework designed to detect and mitigate sophistic
 - Behavioral deviation detection
 
 ### 7. **Secure Logging**
-- Hashed IP addresses in access logs
+- **Hashed IP addresses** in access logs (SHA-256)
+  - Admin dashboard shows truncated hash with "(hashed)" indicator
+  - Full IPs only in `security.log` for authorized access
 - Hidden rejection reasons
 - Hidden raw scores
 - Separate security and access logs
