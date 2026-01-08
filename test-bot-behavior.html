@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bot Detection Test - Automation Simulation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-left: 4px solid #007bff;
+        }
+        .result {
+            margin: 10px 0;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 4px;
+        }
+        .pass { color: green; font-weight: bold; }
+        .fail { color: red; font-weight: bold; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #log {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>🤖 Bot Detection Test Suite</h1>
+        <p>This page tests the anti-bot system by simulating bot-like behavior.</p>
+        
+        <div class="test-section">
+            <h3>Test 1: Automation Properties</h3>
+            <p>Checking for automation indicators in the browser...</p>
+            <div id="automation-result" class="result">Running...</div>
+        </div>
+        
+        <div class="test-section">
+            <h3>Test 2: Perfect Timing Simulation</h3>
+            <p>Simulate bot-like perfect timing patterns...</p>
+            <button onclick="simulatePerfectTiming()">Run Perfect Timing Test</button>
+            <div id="timing-result" class="result"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>Test 3: Linear Mouse Movement</h3>
+            <p>Simulate linear (bot-like) mouse movements...</p>
+            <button onclick="simulateLinearMouse()">Run Linear Mouse Test</button>
+            <div id="mouse-result" class="result"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>Test 4: Zero-Error Behavior</h3>
+            <p>Simulate perfect behavior with no errors...</p>
+            <button onclick="simulateZeroErrors()">Run Zero-Error Test</button>
+            <div id="error-result" class="result"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>Test 5: Check Detection in Admin Dashboard</h3>
+            <button onclick="window.open('admin-monitor.php', '_blank')">Open Admin Dashboard</button>
+            <p><small>After running tests, check the admin dashboard for bot detection results.</small></p>
+        </div>
+        
+        <h3>Test Log:</h3>
+        <div id="log"></div>
+    </div>
+    
+    <script>
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        // Test 1: Check for automation properties
+        function checkAutomation() {
+            const result = document.getElementById('automation-result');
+            const indicators = [];
+            
+            // Check for WebDriver
+            if (navigator.webdriver) {
+                indicators.push('navigator.webdriver = true');
+            }
+            
+            // Check for automation properties
+            if (window.cdc_adoQpoasnfa76pfcZLmcfl_Array || 
+                window.cdc_adoQpoasnfa76pfcZLmcfl_Promise ||
+                window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol) {
+                indicators.push('Chrome automation properties detected');
+            }
+            
+            // Check for Selenium
+            if (window.document.documentElement.getAttribute("selenium") ||
+                window.document.documentElement.getAttribute("webdriver") ||
+                window.document.documentElement.getAttribute("driver")) {
+                indicators.push('Selenium indicators found');
+            }
+            
+            // Check for Puppeteer
+            if (window.__nightmare || window._phantom || window.callPhantom) {
+                indicators.push('Headless browser indicators found');
+            }
+            
+            if (indicators.length > 0) {
+                result.innerHTML = `<span class="fail">⚠️ AUTOMATION DETECTED:</span><br>${indicators.join('<br>')}`;
+                result.style.background = '#ffe6e6';
+                log('🤖 Automation properties detected: ' + indicators.join(', '));
+            } else {
+                result.innerHTML = '<span class="pass">✓ No automation properties detected (normal browser)</span>';
+                result.style.background = '#e6ffe6';
+                log('✓ Running in normal browser (no automation detected)');
+            }
+        }
+        
+        // Test 2: Simulate perfect timing
+        function simulatePerfectTiming() {
+            const result = document.getElementById('timing-result');
+            result.innerHTML = 'Running test...';
+            log('Starting perfect timing simulation...');
+            
+            // Simulate clicks with EXACTLY the same interval (bot-like)
+            const perfectInterval = 500; // 500ms exactly
+            let clicks = 0;
+            
+            const interval = setInterval(() => {
+                clicks++;
+                log(`Click ${clicks} at exactly ${perfectInterval}ms interval`);
+                
+                // Simulate click event
+                document.dispatchEvent(new MouseEvent('click', {
+                    clientX: 100,
+                    clientY: 100
+                }));
+                
+                if (clicks >= 10) {
+                    clearInterval(interval);
+                    result.innerHTML = `<span class="fail">⚠️ Generated 10 clicks with perfect ${perfectInterval}ms timing</span><br>` +
+                                     `<small>Bot-like behavior: Zero timing variance (CV = 0)</small>`;
+                    result.style.background = '#ffe6e6';
+                    log('✓ Perfect timing test complete - should trigger detection');
+                }
+            }, perfectInterval);
+        }
+        
+        // Test 3: Simulate linear mouse movement
+        function simulateLinearMouse() {
+            const result = document.getElementById('mouse-result');
+            result.innerHTML = 'Running test...';
+            log('Starting linear mouse movement simulation...');
+            
+            // Generate perfectly linear mouse movements (bot-like)
+            const startX = 100, startY = 100;
+            const endX = 500, endY = 300;
+            const steps = 20;
+            
+            for (let i = 0; i <= steps; i++) {
+                setTimeout(() => {
+                    const x = startX + (endX - startX) * (i / steps);
+                    const y = startY + (endY - startY) * (i / steps);
+                    
+                    // Dispatch mouse move event with perfectly linear coordinates
+                    document.dispatchEvent(new MouseEvent('mousemove', {
+                        clientX: x,
+                        clientY: y
+                    }));
+                    
+                    if (i === steps) {
+                        result.innerHTML = `<span class="fail">⚠️ Generated ${steps + 1} perfectly linear mouse movements</span><br>` +
+                                         `<small>Bot-like behavior: R² > 0.95 (perfectly straight line)</small>`;
+                        result.style.background = '#ffe6e6';
+                        log('✓ Linear mouse test complete - should trigger detection');
+                    }
+                }, i * 50);
+            }
+        }
+        
+        // Test 4: Simulate zero errors
+        function simulateZeroErrors() {
+            const result = document.getElementById('error-result');
+            result.innerHTML = 'Running test...';
+            log('Starting zero-error behavior simulation...');
+            
+            // Simulate multiple perfect actions with no errors
+            let actions = 0;
+            const interval = setInterval(() => {
+                actions++;
+                
+                // Simulate perfect click (no errors, no cancellations)
+                document.dispatchEvent(new MouseEvent('click', {
+                    clientX: 200 + actions * 10,
+                    clientY: 200
+                }));
+                
+                log(`Perfect action ${actions} - no errors, no corrections`);
+                
+                if (actions >= 20) {
+                    clearInterval(interval);
+                    result.innerHTML = `<span class="fail">⚠️ Performed ${actions} actions with ZERO errors</span><br>` +
+                                     `<small>Bot-like behavior: No natural human mistakes or corrections</small>`;
+                    result.style.background = '#ffe6e6';
+                    log('✓ Zero-error test complete - should trigger detection');
+                }
+            }, 300);
+        }
+        
+        // Run automation check on page load
+        window.addEventListener('load', () => {
+            log('🚀 Bot detection test suite loaded');
+            checkAutomation();
+            log('ℹ️ Run the tests above and then check admin-monitor.php for detection results');
+        });
+    </script>
+</body>
+</html>

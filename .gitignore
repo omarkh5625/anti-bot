@@ -1,0 +1,32 @@
+# Anti-Bot Data Files
+fingerprints.json
+behavior_tracking.json
+blocked_ips.json
+nonces.json
+
+# Log Files
+logs/
+*.log
+
+# Configuration (if contains secrets)
+# config.php
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+
+# Backup Files
+*.bak
+*.backup
