@@ -12,6 +12,14 @@
 (function() {
     'use strict';
     
+    // Configuration constants
+    const ACTIONS_THRESHOLD = 10;           // Send data after this many actions
+    const SEND_INTERVAL_MS = 30000;         // Send data every 30 seconds
+    const MOUSE_MOVE_THROTTLE_MS = 100;     // Track mouse movements every 100ms
+    const MAX_MOUSE_MOVEMENTS = 100;        // Keep last 100 mouse movements
+    const ACTIONS_TO_KEEP = 5;              // Keep last 5 actions after sending
+    const ACTIONS_TO_SEND = 10;             // Send last 10 actions to server
+    
     // Initialize session ID
     const sessionId = sessionStorage.getItem('antibot_session_id') || 
                      'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
@@ -42,8 +50,8 @@
             
             this.lastActionTime = now;
             
-            // Send to server periodically (every 10 actions or 30 seconds)
-            if (this.actions.length >= 10 || (now - this.lastSendTime) > 30000) {
+            // Send to server periodically
+            if (this.actions.length >= ACTIONS_THRESHOLD || (now - this.lastSendTime) > SEND_INTERVAL_MS) {
                 this.sendToServer();
             }
         },
@@ -64,7 +72,7 @@
                 clicks_count: this.clicks.length,
                 keystrokes_count: this.keystrokes.length,
                 errors_count: this.errors.length,
-                actions: this.actions.slice(-10), // Send last 10 actions
+                actions: this.actions.slice(-ACTIONS_TO_SEND),
             };
             
             // Use sendBeacon for reliability
@@ -84,7 +92,7 @@
             }
             
             // Clear old actions but keep recent ones
-            this.actions = this.actions.slice(-5);
+            this.actions = this.actions.slice(-ACTIONS_TO_KEEP);
         }
     };
     
@@ -198,11 +206,11 @@
         mouseDownTarget = null;
     });
     
-    // Track mouse movement patterns (sample every 100ms)
+    // Track mouse movement patterns (sample based on throttle interval)
     let lastMouseTrack = 0;
     document.addEventListener('mousemove', function(e) {
         const now = Date.now();
-        if (now - lastMouseTrack < 100) return; // Throttle to every 100ms
+        if (now - lastMouseTrack < MOUSE_MOVE_THROTTLE_MS) return;
         
         lastMouseTrack = now;
         behaviorTracker.mouseMovements.push({
@@ -211,8 +219,8 @@
             time: now
         });
         
-        // Keep only last 100 movements
-        if (behaviorTracker.mouseMovements.length > 100) {
+        // Keep only recent movements
+        if (behaviorTracker.mouseMovements.length > MAX_MOUSE_MOVEMENTS) {
             behaviorTracker.mouseMovements.shift();
         }
     });
@@ -305,12 +313,12 @@
         behaviorTracker.sendToServer();
     });
     
-    // Periodic send (every 30 seconds)
+    // Periodic send (based on interval constant)
     setInterval(function() {
         if (behaviorTracker.actions.length > 0) {
             behaviorTracker.sendToServer();
         }
-    }, 30000);
+    }, SEND_INTERVAL_MS);
     
     // Note: Debug mode is disabled in production for security
     // Exposing tracker object could allow manipulation of behavioral data

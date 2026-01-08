@@ -15,6 +15,12 @@ if (
 define('FP_FILE', __DIR__ . '/fingerprints.json');
 define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
 
+// Behavioral analysis thresholds (in milliseconds unless noted)
+define('MIN_HUMAN_ACTION_TIME', 100);        // Minimum time between actions for humans (ms)
+define('SESSION_GAP_THRESHOLD', 5);          // Minimum time between sessions for humans (seconds)
+define('SESSION_GAP_SCORE', 30);             // Score penalty for suspicious session gaps
+define('MAX_BEHAVIOR_DATA_SIZE', 102400);    // Maximum POST data size (100KB)
+
 // Ensure logs directory exists
 if (!is_dir(__DIR__ . '/logs')) {
     $dir_created = @mkdir(__DIR__ . '/logs', 0755, true);
@@ -109,10 +115,10 @@ function analyze_temporal_patterns($ip) {
         }
         
         // Check for absence of hesitation (all actions too fast)
-        // Threshold: 100ms - Human users typically take at least 100ms between actions
+        // Threshold: MIN_HUMAN_ACTION_TIME - Human users typically take at least 100ms between actions
         // due to perception, decision-making, and motor response time
         $avg_timing = array_sum($timings) / max(count($timings), 1);
-        if ($avg_timing < 100) { // Less than 100ms average
+        if ($avg_timing < MIN_HUMAN_ACTION_TIME) {
             $score += 25;
             $reasons[] = 'No hesitation or natural pauses';
         }
@@ -269,10 +275,10 @@ function analyze_session_continuity($ip) {
     sort($session_times);
     for ($i = 1; $i < count($session_times); $i++) {
         $gap = $session_times[$i] - $session_times[$i-1];
-        // Threshold: 5 seconds - Legitimate users typically have larger gaps between sessions
+        // Threshold: SESSION_GAP_THRESHOLD - Legitimate users typically have larger gaps between sessions
         // Sessions less than 5 seconds apart indicate automated behavior without natural delays
-        if ($gap < 5) {
-            $score += 30;
+        if ($gap < SESSION_GAP_THRESHOLD) {
+            $score += SESSION_GAP_SCORE;
             $reasons[] = 'Suspicious session timing, missing resume logic';
             break;
         }
@@ -953,8 +959,8 @@ if (isset($_POST['track_behavior']) && isset($_POST['behavior_data'])) {
     
     $raw_data = $_POST['behavior_data'];
     
-    // Validate size to prevent memory exhaustion (max 100KB)
-    if (strlen($raw_data) > 102400) {
+    // Validate size to prevent memory exhaustion
+    if (strlen($raw_data) > MAX_BEHAVIOR_DATA_SIZE) {
         echo json_encode(['status' => 'error', 'message' => 'Data too large']);
         exit;
     }
