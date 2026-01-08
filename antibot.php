@@ -1509,6 +1509,22 @@ function generate_user_agent_hash($user_agent) {
     return hash('sha256', $user_agent);
 }
 
+// Constants for UA validation
+define('UA_HASH_MAX_LENGTH', 200); // Maximum UA length to store
+define('UA_HASH_ROTATION_WINDOW', 3600); // 1 hour in seconds
+define('UA_HASH_RETENTION_DAYS', 7); // Days to keep old hashes
+
+/**
+ * Sanitize User-Agent string for logging
+ * Removes newlines and control characters to prevent log injection
+ */
+function sanitize_user_agent($user_agent) {
+    // Remove newlines, carriage returns, and control characters
+    $sanitized = preg_replace('/[\x00-\x1F\x7F]/', '', $user_agent);
+    // Limit length
+    return substr($sanitized, 0, UA_HASH_MAX_LENGTH);
+}
+
 /**
  * Validate User-Agent hash consistency across sessions
  * Returns true if UA is consistent, false if suspicious change detected
@@ -1517,9 +1533,9 @@ function validate_user_agent_hash($ip, $current_ua) {
     // Place UA hash file outside web root or in protected directory
     $ua_hash_file = __DIR__ . '/logs/ua_hashes.json';
     
-    // Ensure logs directory exists
+    // Ensure logs directory exists with restrictive permissions
     if (!is_dir(__DIR__ . '/logs')) {
-        @mkdir(__DIR__ . '/logs', 0755, true);
+        @mkdir(__DIR__ . '/logs', 0750, true);
     }
     
     // Open file with exclusive lock for reading
@@ -1550,8 +1566,8 @@ function validate_user_agent_hash($ip, $current_ua) {
         $stored_hash = $stored_data['hash'] ?? '';
         $last_seen = $stored_data['timestamp'] ?? 0;
         
-        // If UA hash changed within short period (< 1 hour), suspicious
-        if ($stored_hash !== $current_hash && (time() - $last_seen) < 3600) {
+        // If UA hash changed within short period, suspicious
+        if ($stored_hash !== $current_hash && (time() - $last_seen) < UA_HASH_ROTATION_WINDOW) {
             // UA rotated too quickly - likely bot
             $is_valid = false;
         }
@@ -1561,11 +1577,11 @@ function validate_user_agent_hash($ip, $current_ua) {
     $ua_hashes[$ip] = [
         'hash' => $current_hash,
         'timestamp' => time(),
-        'ua' => substr($current_ua, 0, 200) // Store truncated UA for reference
+        'ua' => sanitize_user_agent($current_ua)
     ];
     
-    // Cleanup old entries (older than 7 days)
-    $cutoff = time() - (7 * 86400);
+    // Cleanup old entries
+    $cutoff = time() - (UA_HASH_RETENTION_DAYS * 86400);
     foreach ($ua_hashes as $ip_key => $data) {
         if (($data['timestamp'] ?? 0) < $cutoff) {
             unset($ua_hashes[$ip_key]);
@@ -1587,9 +1603,10 @@ function validate_user_agent_hash($ip, $current_ua) {
 // Validate User-Agent hash for this request
 $ua_hash_valid = validate_user_agent_hash($client_ip, $user_agent);
 if (!$ua_hash_valid) {
-    // Suspicious UA rotation detected
+    // Suspicious UA rotation detected - sanitize UA before logging
+    $safe_ua = sanitize_user_agent($user_agent);
     file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
-        date("Y-m-d H:i:s") . " | UA_HASH_ROTATION | IP: {$client_ip} | UA: {$user_agent}\n", 
+        date("Y-m-d H:i:s") . " | UA_HASH_ROTATION | IP: {$client_ip} | UA: {$safe_ua}\n", 
         FILE_APPEND);
     
     // Force re-verification
@@ -1697,6 +1714,10 @@ function is_bot_from_github_list(string $ua): bool {
     return false;
 }
 
+// Constants for bot detection
+define('PUPPETEER_VIEWPORT_WIDTH', '1920'); // Common Puppeteer default viewport width
+define('MIN_CHROME_HEADERS_REQUIRED', 2); // Minimum Chrome-specific headers for valid browser
+
 function is_advanced_bot($ip, $ua) {
     if (isset($_COOKIE['js_verified']) && $_COOKIE['js_verified'] === 'yes') {
         return false;
@@ -1743,7 +1764,7 @@ function is_advanced_bot($ip, $ua) {
     $puppeteer_indicators = [
         // Puppeteer often has perfect viewport dimensions
         'HTTP_VIEWPORT_WIDTH' => function($value) {
-            return !empty($value) && $value === '1920';
+            return !empty($value) && $value === PUPPETEER_VIEWPORT_WIDTH;
         },
         // Check for puppeteer-extra-stealth plugin patterns
         'HTTP_DNT' => function($value) {
@@ -1823,8 +1844,8 @@ function is_advanced_bot($ip, $ua) {
             }
         }
         
-        // If less than 2 Chrome headers present, likely fake
-        if ($chrome_headers_present < 2) {
+        // If less than required Chrome headers present, likely fake
+        if ($chrome_headers_present < MIN_CHROME_HEADERS_REQUIRED) {
             return 'Fake Chrome UA (stealth bot)';
         }
     }
