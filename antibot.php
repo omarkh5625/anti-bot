@@ -803,6 +803,7 @@ function save_behavior_data($data) {
 /**
  * Calculate session trust score based on age
  * Trust decreases over time to force periodic re-evaluation
+ * PHILOSOPHY: Let humans pass, exhaust/break bots
  */
 function calculate_session_trust($session_start_time, $config) {
     $now = time();
@@ -810,6 +811,15 @@ function calculate_session_trust($session_start_time, $config) {
     
     // Get decay rate from config (default 5% per hour)
     $decay_rate_per_hour = $config['session_trust_decay_rate'] ?? 5;
+    
+    // Check if this is a long session (different decay rate)
+    $silent_aging = $config['silent_aging'] ?? [];
+    $long_session_threshold = $silent_aging['long_session_threshold'] ?? 7200;
+    
+    if ($session_age > $long_session_threshold && ($silent_aging['enabled'] ?? true)) {
+        // Long session - apply accelerated decay
+        $decay_rate_per_hour = $silent_aging['confidence_decay_rate'] ?? 10;
+    }
     
     // Calculate hours elapsed
     $hours_elapsed = $session_age / 3600;
@@ -828,6 +838,113 @@ function calculate_session_trust($session_start_time, $config) {
     }
     
     return $trust;
+}
+
+/**
+ * Silent session aging mechanism
+ * Automatically lower confidence for long sessions
+ * Apply response delays and reduce quality without CAPTCHA
+ * Returns: 'allow', 'delay', 'renew', or 'terminate'
+ */
+function apply_silent_aging($ip, $config) {
+    $silent_aging = $config['silent_aging'] ?? [];
+    
+    if (!($silent_aging['enabled'] ?? true)) {
+        return 'allow';
+    }
+    
+    // Get fingerprint data for session age
+    $fp_data = get_fingerprint_for_ip($ip);
+    if (!$fp_data || !isset($fp_data['created_at'])) {
+        return 'allow'; // No session data
+    }
+    
+    $session_age = time() - $fp_data['created_at'];
+    $long_session_threshold = $silent_aging['long_session_threshold'] ?? 7200;
+    
+    // Not a long session yet
+    if ($session_age < $long_session_threshold) {
+        return 'allow';
+    }
+    
+    // Calculate current trust
+    $trust = calculate_session_trust($fp_data['created_at'], $config);
+    
+    // If trust very low, attempt silent renewal
+    if ($trust < 30) {
+        // Try to renew session with new nonce
+        if ($silent_aging['auto_renew_nonce'] ?? true) {
+            $renewal_success = attempt_silent_session_renewal($ip, $fp_data, $config);
+            
+            if (!$renewal_success) {
+                // Renewal failed - apply degradation
+                
+                // Apply response delay (waste bot resources)
+                if (isset($silent_aging['delay_on_renewal_fail'])) {
+                    $delay_range = $silent_aging['delay_on_renewal_fail'];
+                    $delay_ms = rand($delay_range[0], $delay_range[1]);
+                    usleep($delay_ms * 1000);
+                }
+                
+                // Signal to reduce response quality
+                if ($silent_aging['reduce_quality_on_fail'] ?? true) {
+                    return 'delay'; // Caller should apply quality reduction
+                }
+            } else {
+                // Renewal successful
+                return 'renew';
+            }
+        }
+    }
+    
+    // Trust still acceptable
+    if ($trust >= 30) {
+        return 'allow';
+    }
+    
+    // Trust too low and renewal failed
+    return 'delay';
+}
+
+/**
+ * Attempt silent session renewal
+ * Re-sign session with new nonce and updated fingerprint
+ * Returns true if renewal successful, false otherwise
+ */
+function attempt_silent_session_renewal($ip, $old_fp_data, $config) {
+    // Verify current session is still valid
+    $binding_valid = verify_session_binding($ip, $old_fp_data['hash'] ?? '');
+    
+    if (!$binding_valid) {
+        return false; // Can't renew - binding violated
+    }
+    
+    // Generate new dynamic fingerprint with updated timestamp
+    $new_fp = generate_dynamic_fingerprint($ip, $old_fp_data['session_id'] ?? null);
+    
+    // Verify JA3 hasn't changed (mandatory check)
+    $ja3_valid = verify_ja3_match($ip, $old_fp_data);
+    if (!$ja3_valid) {
+        return false; // JA3 mismatch - terminate
+    }
+    
+    // Save updated fingerprint with new timestamp
+    save_fingerprint($ip, $new_fp, $old_fp_data['session_id'] ?? null);
+    
+    // Update cookie with new fingerprint (silent renewal)
+    setcookie('fp_hash', $new_fp, time() + 86400, '/');
+    
+    // Log silent renewal
+    if (is_dir(__DIR__ . '/logs')) {
+        file_put_contents(
+            __DIR__ . '/logs/security.log',
+            date('Y-m-d H:i:s') . " | SILENT_RENEWAL | IP: {$ip} | " .
+            "Session age: " . (time() - ($old_fp_data['created_at'] ?? time())) . "s\n",
+            FILE_APPEND
+        );
+    }
+    
+    return true;
 }
 
 /**
@@ -1379,6 +1496,58 @@ function analyze_session_continuity($ip) {
 }
 
 /**
+ * Get randomized evaluation window
+ * Makes evaluation windows unpredictable to prevent reverse engineering
+ * Static logic is learnable and therefore unacceptable
+ */
+function get_randomized_window($base_window_seconds, $config) {
+    if (!($config['evaluation_windows_randomized'] ?? true)) {
+        return $base_window_seconds;
+    }
+    
+    $variance_pct = ($config['window_variance'] ?? 20) / 100;
+    
+    // Add random variance +/- variance_pct
+    $variance = (mt_rand() / mt_getrandmax() * 2 - 1) * $variance_pct;
+    $randomized = $base_window_seconds * (1 + $variance);
+    
+    return max(1, $randomized); // At least 1 second
+}
+
+/**
+ * Randomize check order to prevent static logic detection
+ * Returns shuffled array of check names
+ */
+function randomize_check_order($config) {
+    if (!($config['evaluation_order_randomized'] ?? true)) {
+        return [
+            'temporal',
+            'noise',
+            'semantics',
+            'continuity',
+            'mouse',
+            'idealized',
+            'drift',
+            'entropy_memory'
+        ];
+    }
+    
+    $checks = [
+        'temporal',
+        'noise',
+        'semantics',
+        'continuity',
+        'mouse',
+        'idealized',
+        'drift',
+        'entropy_memory'
+    ];
+    
+    shuffle($checks);
+    return $checks;
+}
+
+/**
  * Analyze timing entropy across multiple sessions (Entropy Memory)
  * Stores and compares average time variance per fingerprint
  * Detects automation through consistent timing with minimal variation
@@ -1475,8 +1644,10 @@ function analyze_timing_entropy_memory($ip) {
     
     $entropy_data[$ip]['last_updated'] = time();
     
-    // Cleanup old entropy data (older than 7 days)
-    $cutoff = time() - (7 * 86400);
+    // Cleanup old entropy data (randomized retention window)
+    $base_retention_days = 7;
+    $retention_seconds = get_randomized_window($base_retention_days * 86400, $config);
+    $cutoff = time() - $retention_seconds;
     foreach ($entropy_data as $ip_key => $data) {
         if (($data['last_updated'] ?? 0) < $cutoff) {
             unset($entropy_data[$ip_key]);
@@ -1911,7 +2082,9 @@ function check_shadow_rate_limit($ip) {
 
 /**
  * Apply shadow enforcement to detected bot
- * Returns response that fools the bot into thinking it succeeded
+ * PHILOSOPHY: Provide correct-looking but meaningless responses
+ * Non-uniform delays, light throttling, NO phantom pages/fake elements
+ * Objective: Poison ML without harming UX for humans
  */
 function apply_shadow_enforcement($ip, $bot_score, $config) {
     // Check shadow mode configuration
@@ -1933,20 +2106,55 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
     // Silent rate limiting
     if ($tactics['silent_rate_limit'] ?? false) {
         if (!check_shadow_rate_limit($ip)) {
-            // Silently slow down the bot with artificial delay
-            // Note: This intentionally blocks to waste bot resources
-            // Use shorter delays if performance is a concern
-            $delay_ms = rand(2000, 5000); // 2-5 seconds in milliseconds
-            usleep($delay_ms * 1000); // Convert to microseconds
-            // Still continue to show fake success
+            // Apply non-uniform delay (prevents learning patterns)
+            if ($tactics['non_uniform_delays'] ?? true) {
+                // Vary delay based on request count to prevent pattern detection
+                $base_delay = rand(1500, 3500);
+                $jitter = rand(-500, 500); // Add jitter
+                $delay_ms = max(1000, $base_delay + $jitter);
+            } else {
+                $delay_ms = rand(2000, 5000);
+            }
+            usleep($delay_ms * 1000);
         }
     }
     
-    // Apply response delay to waste bot resources
-    // Note: This is intentional for bot deterrence
+    // Apply light throttling with non-uniform delays
+    if ($tactics['light_throttling'] ?? true) {
+        // Gradually increase delay based on bot score
+        $throttle_factor = ($bot_score - 50) / 50; // 0-1 range for scores 50-100
+        $throttle_factor = max(0, min(1, $throttle_factor));
+        
+        if ($throttle_factor > 0) {
+            $base_delay = $tactics['response_delay_min'] ?? 2000;
+            $max_delay = $tactics['response_delay_max'] ?? 5000;
+            $throttle_delay = $base_delay + ($throttle_factor * ($max_delay - $base_delay));
+            
+            // Add non-uniform jitter (prevents ML from learning the pattern)
+            if ($tactics['non_uniform_delays'] ?? true) {
+                $jitter = rand(-300, 300);
+                $throttle_delay += $jitter;
+            }
+            
+            usleep(max(0, $throttle_delay) * 1000);
+        }
+    }
+    
+    // Response delay with non-uniform timing
     if (isset($tactics['response_delay_min']) && isset($tactics['response_delay_max'])) {
-        $delay_ms = rand($tactics['response_delay_min'], $tactics['response_delay_max']);
-        usleep($delay_ms * 1000); // Convert ms to microseconds
+        if ($tactics['non_uniform_delays'] ?? true) {
+            // Non-uniform delays: harder to reverse engineer
+            $min = $tactics['response_delay_min'];
+            $max = $tactics['response_delay_max'];
+            $base_delay = rand($min, $max);
+            
+            // Add time-based variance (changes behavior over time)
+            $time_variance = (time() % 10) * 100; // 0-900ms variance based on time
+            $delay_ms = $base_delay + $time_variance;
+        } else {
+            $delay_ms = rand($tactics['response_delay_min'], $tactics['response_delay_max']);
+        }
+        usleep($delay_ms * 1000);
     }
     
     // Determine shadow tactic based on bot score
@@ -1963,12 +2171,14 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
 
 /**
  * Generate fake success response for shadow enforcement
- * Bot thinks it succeeded but actually gets useless data
+ * Correct-looking but meaningless data to poison ML training
+ * NO phantom pages or fake elements per requirements
  */
 function generate_fake_success_response($tactic_level) {
     switch ($tactic_level) {
         case 'shadow_harsh':
-            // Return completely fake data that looks real
+            // Return completely fake but correct-looking data
+            // Poison ML: looks valid, trains model incorrectly
             return [
                 'success' => true,
                 'message' => 'Request processed successfully',
@@ -1976,30 +2186,41 @@ function generate_fake_success_response($tactic_level) {
                     'id' => 'fake_' . uniqid(),
                     'status' => 'completed',
                     'timestamp' => time(),
-                    'items' => [] // Empty results
+                    'items' => [], // Empty results (meaningless)
+                    'total' => 0,
+                    'metadata' => [
+                        'processed' => true,
+                        'valid' => true,
+                        'checksum' => hash('sha256', 'meaningless_' . time())
+                    ]
                 ]
             ];
             
         case 'shadow_moderate':
-            // Return incomplete/truncated data
+            // Return incomplete/truncated data (light degradation)
+            // Poison ML: partial data trains model poorly
             return [
                 'success' => true,
-                'message' => 'Partial results',
+                'message' => 'Partial results available',
                 'data' => [
                     'id' => 'partial_' . uniqid(),
                     'status' => 'processing', // Perpetual processing state
-                    'progress' => rand(10, 90) // Random progress
+                    'progress' => rand(10, 90), // Random progress (never completes)
+                    'estimated_time' => rand(30, 300), // Fake ETA
+                    'items' => array_fill(0, rand(1, 3), ['id' => 'fake_item', 'data' => null])
                 ]
             ];
             
         case 'shadow_light':
-            // Subtle degradation
+            // Subtle degradation (queue/pending state)
+            // Poison ML: trains on delayed responses
             return [
                 'success' => true,
-                'message' => 'Request queued',
+                'message' => 'Request queued for processing',
                 'data' => [
                     'id' => 'queued_' . uniqid(),
                     'status' => 'pending',
+                    'queue_position' => rand(10, 100),
                     'estimated_time' => rand(300, 3600) // Random long delay
                 ]
             ];
@@ -2157,6 +2378,66 @@ $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
 
 // Session-network binding verification for returning visitors
 if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
+    // Apply silent session aging mechanism
+    $aging_action = apply_silent_aging($client_ip, $config);
+    
+    if ($aging_action === 'delay') {
+        // Trust too low, apply response delays and quality reduction
+        // This exhausts bots without affecting humans significantly
+        
+        // Log aging action
+        file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
+            date("Y-m-d H:i:s") . " | SILENT_AGING_DELAY | IP: {$client_ip} | Reason: Low trust, renewal failed\n", 
+            FILE_APPEND);
+        
+        // Quality reduction: Show slower loading but still allow access
+        // NO CAPTCHA as per requirements
+        ?>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="3;url=<?php echo htmlspecialchars($_SERVER['REQUEST_URI']); ?>">
+            <title>Loading...</title>
+            <style>
+                body {
+                    margin: 0;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    background: #f5f5f5;
+                }
+                .loader {
+                    text-align: center;
+                }
+                .spinner {
+                    border: 4px solid #f3f3f3;
+                    border-top: 4px solid #3498db;
+                    border-radius: 50%;
+                    width: 40px;
+                    height: 40px;
+                    animation: spin 1s linear infinite;
+                    margin: 0 auto 20px;
+                }
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="loader">
+                <div class="spinner"></div>
+                <p>Loading your content...</p>
+            </div>
+        </body>
+        </html>
+        <?php
+        exit;
+    }
+    
     // Verify session-network binding
     $binding_valid = verify_session_binding($client_ip, $_COOKIE['fp_hash']);
     

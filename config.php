@@ -56,7 +56,9 @@ return [
     // ============================================
 
     'evaluation_order_randomized' => true,
-    'weight_randomization' => 10,
+    'weight_randomization' => 10, // % variance in weights
+    'evaluation_windows_randomized' => true, // NEW: Randomize evaluation windows
+    'window_variance' => 20, // % variance in time windows
 
     'mouse_analysis' => [
         'min_entropy' => 0.3,
@@ -79,18 +81,29 @@ return [
     // SESSION MANAGEMENT
     // ============================================
 
-    'session_trust_decay_rate' => 5,
-    'session_max_age' => 86400,
+    'session_trust_decay_rate' => 5, // % per hour
+    'session_max_age' => 86400, // 24 hours
 
     'enforce_subnet_binding' => true,
     'enforce_tls_binding' => true, // Mandatory TLS/JA3 fingerprinting
     'enforce_ua_binding' => false,
+    
+    // Silent Session Aging
+    'silent_aging' => [
+        'enabled' => true,
+        'long_session_threshold' => 7200, // 2 hours = long session
+        'confidence_decay_rate' => 10, // % decay per hour for long sessions
+        'auto_renew_nonce' => true, // Re-sign session with new nonce
+        'delay_on_renewal_fail' => [2000, 4000], // Delay range in ms
+        'reduce_quality_on_fail' => true, // Lower response quality
+        'no_captcha_on_aging' => true, // Never show CAPTCHA for aging
+    ],
 
     // ============================================
     // SHADOW ENFORCEMENT
     // ============================================
 
-    'shadow_mode' => 'shadow',
+    'shadow_mode' => 'shadow', // 'monitor', 'shadow', or 'block'
 
     'shadow_tactics' => [
         'silent_rate_limit' => true,
@@ -98,6 +111,11 @@ return [
         'response_delay_max' => 5000,
         'fake_success_responses' => true,
         'perpetual_loading' => true,
+        'meaningless_responses' => true, // Correct-looking but useless data
+        'non_uniform_delays' => true, // Vary delays to prevent learning
+        'light_throttling' => true, // Gradual slowdown
+        'poison_ml' => true, // Poison machine learning training data
+        'no_phantom_pages' => true, // Never use fake elements (per requirements)
     ],
 
     'shadow_rate_limit' => 10,
