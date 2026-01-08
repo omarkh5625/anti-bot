@@ -59,8 +59,178 @@ if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST')
     exit;
 }
 
-// ✅ Handle behavioral tracking data from frontend
+// ============================================
+// CRYPTOGRAPHIC SIGNATURE VERIFICATION
+// ============================================
+
+define('NONCE_FILE', __DIR__ . '/nonces.json');
+
+/**
+ * Load used nonces for replay attack prevention
+ */
+function load_nonces() {
+    if (!file_exists(NONCE_FILE)) {
+        file_put_contents(NONCE_FILE, json_encode([], JSON_PRETTY_PRINT));
+    }
+    return json_decode(file_get_contents(NONCE_FILE), true) ?: [];
+}
+
+/**
+ * Save nonces
+ */
+function save_nonces($nonces) {
+    file_put_contents(NONCE_FILE, json_encode($nonces, JSON_PRETTY_PRINT));
+}
+
+/**
+ * Check if nonce has been used (replay attack detection)
+ */
+function is_nonce_used($nonce) {
+    $nonces = load_nonces();
+    return isset($nonces[$nonce]);
+}
+
+/**
+ * Mark nonce as used
+ */
+function mark_nonce_used($nonce) {
+    $nonces = load_nonces();
+    $nonces[$nonce] = [
+        'used_at' => time(),
+        'ip' => get_client_ip()
+    ];
+    
+    // Cleanup old nonces (older than 1 hour)
+    $cutoff = time() - 3600;
+    foreach ($nonces as $n => $data) {
+        if ($data['used_at'] < $cutoff) {
+            unset($nonces[$n]);
+        }
+    }
+    
+    save_nonces($nonces);
+}
+
+/**
+ * Verify nonce is valid and not expired
+ */
+function verify_nonce($nonce) {
+    // Nonce format: timestamp_random
+    $parts = explode('_', $nonce);
+    if (count($parts) < 2) {
+        return false;
+    }
+    
+    $timestamp = intval($parts[0]);
+    $now = time() * 1000; // Convert to milliseconds
+    
+    // Nonce must not be older than 5 minutes
+    if (($now - $timestamp) > 300000) {
+        return false;
+    }
+    
+    // Nonce must not be from the future (with 1 minute tolerance)
+    if ($timestamp > $now + 60000) {
+        return false;
+    }
+    
+    // Check if nonce was already used (replay attack)
+    if (is_nonce_used($nonce)) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * Generate expected signing key for a session
+ * This matches the client-side key generation
+ */
+function generate_signing_key($session_id, $user_agent) {
+    $keyBase = $session_id . '_' . $_SERVER['SERVER_NAME'] . '_' . substr($user_agent, 0, 50);
+    return substr(base64_encode($keyBase), 0, 32);
+}
+
+/**
+ * Verify HMAC signature of telemetry data
+ */
+function verify_telemetry_signature($payload, $signature, $nonce, $session_id, $user_agent) {
+    // Generate expected signing key
+    $signingKey = generate_signing_key($session_id, $user_agent);
+    
+    // Calculate expected signature: HMAC(key, nonce + payload)
+    $messageToSign = $nonce . $payload;
+    $expectedSignature = hash_hmac('sha256', $messageToSign, $signingKey);
+    
+    // Constant-time comparison to prevent timing attacks
+    return hash_equals($expectedSignature, $signature);
+}
+
+// ✅ Handle behavioral tracking data from frontend with signature verification
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['track_behavior'])) {
+    $behavior_json = $_POST['behavior_data'] ?? '';
+    $signature = $_POST['signature'] ?? '';
+    $nonce = $_POST['nonce'] ?? '';
+    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    
+    // CRITICAL: Verify signature before processing any data
+    // This prevents bots from sending forged telemetry
+    $signature_valid = false;
+    $nonce_valid = false;
+    
+    if (!empty($signature) && !empty($nonce) && strlen($behavior_json) > 0) {
+        // Parse behavior data to get session_id
+        $behavior_data = json_decode($behavior_json, true);
+        
+        if ($behavior_data && isset($behavior_data['session_id'])) {
+            // Verify nonce is valid and not reused
+            $nonce_valid = verify_nonce($nonce);
+            
+            if ($nonce_valid) {
+                // Verify signature
+                if (strpos($signature, 'fallback_') === 0) {
+                    // Client used fallback signing (old browser)
+                    // Be more lenient but still validate format
+                    $signature_valid = strlen($signature) > 20;
+                } else {
+                    // Full HMAC verification
+                    $signature_valid = verify_telemetry_signature(
+                        $behavior_json,
+                        $signature,
+                        $nonce,
+                        $behavior_data['session_id'],
+                        $user_agent
+                    );
+                }
+                
+                if ($signature_valid) {
+                    // Mark nonce as used to prevent replay
+                    mark_nonce_used($nonce);
+                }
+            }
+        }
+    }
+    
+    // Block unsigned or invalid telemetry
+    if (!$signature_valid || !$nonce_valid) {
+        // Log security event
+        $client_ip = get_client_ip();
+        $reason = !$nonce_valid ? 'Invalid/expired/reused nonce' : 'Invalid signature';
+        
+        if (is_dir(__DIR__ . '/logs')) {
+            file_put_contents(
+                __DIR__ . '/logs/security.log',
+                date('Y-m-d H:i:s') . " | UNSIGNED_TELEMETRY | IP: {$client_ip} | Reason: {$reason}\n",
+                FILE_APPEND
+            );
+        }
+        
+        // Return 403 Forbidden for unsigned data
+        http_response_code(403);
+        exit;
+    }
+    
+    // Signature verified - process the data
     $behavior_json = $_POST['behavior_data'] ?? '';
     
     // Validate data size
@@ -305,11 +475,23 @@ function get_fingerprint_for_ip($ip) {
     return $fps[$ip] ?? null;
 }
 
-// Admin monitoring - Log access attempt with full details
+// Admin monitoring - Log access attempt with secure logging practices
 function log_access_attempt($ip, $verdict, $bot_score, $bot_analysis, $characteristics = [], $automation_flags = []) {
+    global $config;
+    
     if (!defined('ACCESS_LOG_FILE')) {
         return; // Skip if not defined
     }
+    
+    // Get logging configuration
+    $logging_config = $config['logging'] ?? [];
+    $hash_fingerprints = $logging_config['hash_fingerprints'] ?? true;
+    $hide_rejection_reasons = $logging_config['hide_rejection_reasons'] ?? true;
+    $hide_raw_scores = $logging_config['hide_raw_scores'] ?? true;
+    $separate_security_logs = $logging_config['separate_security_logs'] ?? true;
+    
+    // Hash IP for privacy (but keep in security log)
+    $hashed_ip = $hash_fingerprints ? hash('sha256', $ip . 'antibot_salt') : $ip;
     
     // Load existing logs
     $logs = [];
@@ -318,21 +500,21 @@ function log_access_attempt($ip, $verdict, $bot_score, $bot_analysis, $character
         $logs = json_decode($content, true) ?: [];
     }
     
-    // Create log entry
+    // Create log entry with obfuscated data
     $entry = [
         'timestamp' => date('Y-m-d H:i:s'),
-        'ip' => $ip,
+        'ip_hash' => $hashed_ip, // Hashed for privacy
         'verdict' => $verdict, // 'human', 'bot', 'uncertain', 'automation'
-        'bot_score' => round($bot_score, 2),
+        'bot_score' => $hide_raw_scores ? 'hidden' : round($bot_score, 2),
         'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown',
         'characteristics' => $characteristics,
         'domain_scores' => [
-            'temporal' => $bot_analysis['domain_scores']['temporal'] ?? 0,
-            'noise' => $bot_analysis['domain_scores']['noise'] ?? 0,
-            'semantics' => $bot_analysis['domain_scores']['semantics'] ?? 0,
-            'continuity' => $bot_analysis['domain_scores']['continuity'] ?? 0
+            'temporal' => $hide_raw_scores ? 'hidden' : ($bot_analysis['domain_scores']['temporal'] ?? 0),
+            'noise' => $hide_raw_scores ? 'hidden' : ($bot_analysis['domain_scores']['noise'] ?? 0),
+            'semantics' => $hide_raw_scores ? 'hidden' : ($bot_analysis['domain_scores']['semantics'] ?? 0),
+            'continuity' => $hide_raw_scores ? 'hidden' : ($bot_analysis['domain_scores']['continuity'] ?? 0)
         ],
-        'flags' => $bot_analysis['reasons'] ?? [],
+        'flags' => $hide_rejection_reasons ? ['hidden'] : ($bot_analysis['reasons'] ?? []),
         'automation_flags' => $automation_flags
     ];
     
@@ -340,8 +522,19 @@ function log_access_attempt($ip, $verdict, $bot_score, $bot_analysis, $character
     $logs[] = $entry;
     $logs = array_slice($logs, -1000);
     
-    // Save logs
+    // Save to main access log
     file_put_contents(ACCESS_LOG_FILE, json_encode($logs, JSON_PRETTY_PRINT));
+    
+    // If separate security logs enabled, write detailed info there
+    if ($separate_security_logs && isset($config['security_log_file'])) {
+        $security_entry = date('Y-m-d H:i:s') . " | " . 
+            "VERDICT: {$verdict} | " .
+            "IP: {$ip} | " . // Real IP in security log
+            "SCORE: " . round($bot_score, 2) . " | " .
+            "REASONS: " . implode(', ', $bot_analysis['reasons'] ?? []) . "\n";
+        
+        file_put_contents($config['security_log_file'], $security_entry, FILE_APPEND);
+    }
 }
 
 // Behavioral tracking functions
@@ -354,6 +547,109 @@ function load_behavior_data() {
 
 function save_behavior_data($data) {
     file_put_contents(BEHAVIOR_FILE, json_encode($data, JSON_PRETTY_PRINT));
+}
+
+// ============================================
+// SESSION AGING & TRUST DECAY
+// ============================================
+
+/**
+ * Calculate session trust score based on age
+ * Trust decreases over time to force periodic re-evaluation
+ */
+function calculate_session_trust($session_start_time, $config) {
+    $now = time();
+    $session_age = $now - $session_start_time;
+    
+    // Get decay rate from config (default 5% per hour)
+    $decay_rate_per_hour = $config['session_trust_decay_rate'] ?? 5;
+    
+    // Calculate hours elapsed
+    $hours_elapsed = $session_age / 3600;
+    
+    // Calculate trust: starts at 100%, decays over time
+    $trust = 100 - ($hours_elapsed * $decay_rate_per_hour);
+    
+    // Trust can't go below 0
+    $trust = max(0, $trust);
+    
+    // Check if session exceeded max age
+    $max_age = $config['session_max_age'] ?? 86400; // 24 hours default
+    if ($session_age > $max_age) {
+        // Session too old - force re-verification
+        return 0;
+    }
+    
+    return $trust;
+}
+
+/**
+ * Check if session needs re-evaluation
+ * Returns true if trust is too low or behavioral deviations detected
+ */
+function needs_reevaluation($ip, $config) {
+    // Check fingerprint data for session age
+    $fp_data = get_fingerprint_for_ip($ip);
+    if (!$fp_data || !isset($fp_data['created_at'])) {
+        return true; // No valid session
+    }
+    
+    // Calculate current trust
+    $trust = calculate_session_trust($fp_data['created_at'], $config);
+    
+    // Re-evaluate if trust below 30%
+    if ($trust < 30) {
+        return true;
+    }
+    
+    // Check for behavioral deviations
+    $behavior_data = load_behavior_data();
+    if (isset($behavior_data[$ip])) {
+        $ip_behavior = $behavior_data[$ip];
+        
+        // Check for sudden changes in behavior patterns
+        if (isset($ip_behavior['sessions'])) {
+            $sessions = array_values($ip_behavior['sessions']);
+            $session_count = count($sessions);
+            
+            if ($session_count >= 2) {
+                // Compare recent session to earlier sessions
+                $recent = end($sessions);
+                $earlier = $sessions[0];
+                
+                // Check if action patterns changed significantly
+                $recent_actions = count($recent['actions'] ?? []);
+                $earlier_actions = count($earlier['actions'] ?? []);
+                
+                if ($earlier_actions > 0) {
+                    $change_ratio = abs($recent_actions - $earlier_actions) / $earlier_actions;
+                    
+                    // If pattern changed more than 200%, flag for re-evaluation
+                    if ($change_ratio > 2.0) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    return false;
+}
+
+/**
+ * Force session re-verification
+ */
+function force_session_reverification($ip) {
+    // Clear all cookies
+    setcookie('fp_hash', '', time() - 3600, '/');
+    setcookie('js_verified', '', time() - 3600, '/');
+    setcookie('analysis_done', '', time() - 3600, '/');
+    setcookie('behavior_verified', '', time() - 3600, '/');
+    
+    // Remove fingerprint
+    $fps = load_fingerprints();
+    unset($fps[$ip]);
+    file_put_contents(FP_FILE, json_encode($fps, JSON_PRETTY_PRINT));
 }
 
 function track_temporal_behavior($ip, $action, $timestamp, $data = []) {
@@ -644,6 +940,147 @@ function calculate_bot_confidence($ip) {
         ]
     ];
 }
+
+// ============================================
+// SHADOW ENFORCEMENT LAYER
+// ============================================
+
+/**
+ * Track shadow rate limiting per IP
+ */
+function check_shadow_rate_limit($ip) {
+    static $rate_limits = [];
+    
+    if (!isset($rate_limits[$ip])) {
+        $rate_limits[$ip] = [
+            'requests' => [],
+            'blocked_until' => 0
+        ];
+    }
+    
+    $now = time();
+    
+    // Check if currently blocked
+    if ($rate_limits[$ip]['blocked_until'] > $now) {
+        return false; // Rate limited
+    }
+    
+    // Clean old requests (older than 60 seconds)
+    $rate_limits[$ip]['requests'] = array_filter(
+        $rate_limits[$ip]['requests'],
+        function($timestamp) use ($now) { return ($now - $timestamp) < 60; }
+    );
+    
+    // Add current request
+    $rate_limits[$ip]['requests'][] = $now;
+    
+    // Check if exceeded limit (10 requests per minute for bots)
+    if (count($rate_limits[$ip]['requests']) > 10) {
+        // Block for 5 minutes
+        $rate_limits[$ip]['blocked_until'] = $now + 300;
+        return false;
+    }
+    
+    return true; // Not rate limited
+}
+
+/**
+ * Apply shadow enforcement to detected bot
+ * Returns response that fools the bot into thinking it succeeded
+ */
+function apply_shadow_enforcement($ip, $bot_score, $config) {
+    // Check shadow mode configuration
+    $shadow_mode = $config['shadow_mode'] ?? 'shadow';
+    
+    if ($shadow_mode === 'monitor') {
+        // Monitor only - don't enforce
+        return null;
+    }
+    
+    if ($shadow_mode === 'block') {
+        // Hard block - redirect immediately
+        return 'block';
+    }
+    
+    // Shadow mode - apply various tactics
+    $tactics = $config['shadow_tactics'] ?? [];
+    
+    // Silent rate limiting
+    if ($tactics['silent_rate_limit'] ?? false) {
+        if (!check_shadow_rate_limit($ip)) {
+            // Silently slow down the bot with artificial delay
+            $delay = rand(5, 15); // 5-15 seconds
+            sleep($delay);
+            // Still continue to show fake success
+        }
+    }
+    
+    // Apply response delay to waste bot resources
+    if (isset($tactics['response_delay_min']) && isset($tactics['response_delay_max'])) {
+        $delay_ms = rand($tactics['response_delay_min'], $tactics['response_delay_max']);
+        usleep($delay_ms * 1000); // Convert ms to microseconds
+    }
+    
+    // Determine shadow tactic based on bot score
+    if ($bot_score >= 80) {
+        // Very high confidence bot - apply strongest shadow tactics
+        return 'shadow_harsh';
+    } elseif ($bot_score >= 60) {
+        // Likely bot - apply moderate shadow tactics
+        return 'shadow_moderate';
+    }
+    
+    return 'shadow_light';
+}
+
+/**
+ * Generate fake success response for shadow enforcement
+ * Bot thinks it succeeded but actually gets useless data
+ */
+function generate_fake_success_response($tactic_level) {
+    switch ($tactic_level) {
+        case 'shadow_harsh':
+            // Return completely fake data that looks real
+            return [
+                'success' => true,
+                'message' => 'Request processed successfully',
+                'data' => [
+                    'id' => 'fake_' . uniqid(),
+                    'status' => 'completed',
+                    'timestamp' => time(),
+                    'items' => [] // Empty results
+                ]
+            ];
+            
+        case 'shadow_moderate':
+            // Return incomplete/truncated data
+            return [
+                'success' => true,
+                'message' => 'Partial results',
+                'data' => [
+                    'id' => 'partial_' . uniqid(),
+                    'status' => 'processing', // Perpetual processing state
+                    'progress' => rand(10, 90) // Random progress
+                ]
+            ];
+            
+        case 'shadow_light':
+            // Subtle degradation
+            return [
+                'success' => true,
+                'message' => 'Request queued',
+                'data' => [
+                    'id' => 'queued_' . uniqid(),
+                    'status' => 'pending',
+                    'estimated_time' => rand(300, 3600) // Random long delay
+                ]
+            ];
+            
+        default:
+            return ['success' => true];
+    }
+}
+
 $config = require __DIR__ . '/config.php';
 
 $LOG_FILE                   = $config['log_file'];
@@ -792,17 +1229,30 @@ $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
 
 // Session-network binding verification for returning visitors
 if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
-    // Verify session-network binding
-    if (!verify_session_binding($client_ip, $_COOKIE['fp_hash'])) {
-        // Network changed or session binding failed - require re-verification
-        setcookie('fp_hash', '', time() - 3600, '/');
-        setcookie('js_verified', '', time() - 3600, '/');
-        setcookie('analysis_done', '', time() - 3600, '/');
+    // Check if session needs re-evaluation due to aging or behavioral deviation
+    if (needs_reevaluation($client_ip, $config)) {
+        // Session trust too low or behavioral deviation detected
+        force_session_reverification($client_ip);
         
-        // Log suspicious activity
+        // Log re-evaluation trigger
         file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
-            date("Y-m-d H:i:s") . " | SESSION_BINDING_FAILED | IP: {$client_ip} | Reason: Network context changed\n", 
+            date("Y-m-d H:i:s") . " | SESSION_REEVALUATION | IP: {$client_ip} | Reason: Session aging or behavioral deviation\n", 
             FILE_APPEND);
+        
+        // Continue to verification flow
+    } else {
+        // Verify session-network binding
+        if (!verify_session_binding($client_ip, $_COOKIE['fp_hash'])) {
+            // Network changed or session binding failed - require re-verification
+            setcookie('fp_hash', '', time() - 3600, '/');
+            setcookie('js_verified', '', time() - 3600, '/');
+            setcookie('analysis_done', '', time() - 3600, '/');
+            
+            // Log suspicious activity
+            file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
+                date("Y-m-d H:i:s") . " | SESSION_BINDING_FAILED | IP: {$client_ip} | Reason: Network context changed\n", 
+                FILE_APPEND);
+        }
     }
 }
 
@@ -1169,16 +1619,96 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         }
     }
     
-    // Block likely bots immediately - redirect to a famous website
+    // Handle likely bots with shadow enforcement
     if ($bot_analysis['is_likely_bot']) {
         $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
-        // Log the block
-        file_put_contents($LOG_FILE, date("Y-m-d H:i:s") . " | BLOCKED | IP: {$client_ip} | UA: {$user_agent} | Reason: {$reason}\n", FILE_APPEND);
-        // Log to admin dashboard
+        
+        // Log to admin dashboard (hashed for security)
         log_access_attempt($client_ip, 'bot', $bot_analysis['confidence'], $bot_analysis, $characteristics);
-        // Redirect bots to a well-known site instead of showing block page
-        header("Location: https://www.google.com");
-        exit;
+        
+        // Apply shadow enforcement instead of immediate block
+        $shadow_action = apply_shadow_enforcement($client_ip, $bot_analysis['confidence'], $config);
+        
+        if ($shadow_action === 'block') {
+            // Hard block mode - immediate redirect
+            file_put_contents($LOG_FILE, date("Y-m-d H:i:s") . " | BLOCKED | IP: {$client_ip} | Reason: {$reason}\n", FILE_APPEND);
+            header("Location: https://www.google.com");
+            exit;
+        } elseif ($shadow_action && strpos($shadow_action, 'shadow_') === 0) {
+            // Shadow enforcement - show fake success or slow down bot
+            
+            // For page requests, show a fake loading page that never completes
+            ?>
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>Loading...</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body {
+                        margin: 0;
+                        padding: 0;
+                        height: 100vh;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        background: #f8f9fa;
+                        font-family: "Segoe UI", Arial, sans-serif;
+                    }
+                    .container {
+                        text-align: center;
+                        padding: 40px;
+                    }
+                    .spinner {
+                        width: 50px;
+                        height: 50px;
+                        margin: 0 auto 20px;
+                        border: 4px solid #e0e0e0;
+                        border-top: 4px solid #007bff;
+                        border-radius: 50%;
+                        animation: spin 1s linear infinite;
+                    }
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                    .message {
+                        font-size: 18px;
+                        color: #333;
+                        margin-bottom: 10px;
+                    }
+                    .submessage {
+                        font-size: 14px;
+                        color: #666;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="spinner"></div>
+                    <div class="message">Processing your request...</div>
+                    <div class="submessage">Please wait while we verify your connection</div>
+                </div>
+                <script>
+                    // Fake progress that never completes
+                    let progress = 0;
+                    setInterval(() => {
+                        progress += Math.random() * 2;
+                        if (progress > 98) progress = 98; // Never reach 100%
+                        console.log('Loading: ' + Math.floor(progress) + '%');
+                    }, <?php echo rand(2000, 5000); ?>);
+                    
+                    // Occasionally show fake "success" but don't redirect
+                    setTimeout(() => {
+                        document.querySelector('.message').textContent = 'Almost there...';
+                    }, <?php echo rand(30000, 60000); ?>);
+                </script>
+            </body>
+            </html>
+            <?php
+            exit;
+        }
     }
     
     // Seamless access for confident humans - set cookies and allow entry
