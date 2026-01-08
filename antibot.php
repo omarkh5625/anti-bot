@@ -2750,7 +2750,7 @@ $is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash'])
 
 if ($is_first_visit) {
     // First visit: Show analysis page for 5 seconds to collect behavioral data
-    setcookie('analysis_done', 'yes', time() + 86400, '/');
+    setcookie('analysis_done', 'yes', time() + 86400, '/', '', false, true); // httponly for security
     ?>
     <!DOCTYPE html>
     <html lang="en">
@@ -2811,17 +2811,25 @@ if ($is_first_visit) {
           localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
         } catch(e) {}
         
-        // Force send behavioral data and wait for completion before reload
-        setTimeout(async function() {
-          if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
-            // Send data and wait a bit for it to complete
-            window.behaviorTracker.sendToServer();
-            // Wait 500ms for sendBeacon to complete
-            await new Promise(resolve => setTimeout(resolve, 600));
-          }
-          // After data is sent, navigate to same URL to trigger analysis
-          window.location.href = window.location.href;
-        }, 4400);
+        // Set a flag in sessionStorage to prevent infinite loops
+        if (sessionStorage.getItem('antibot_first_check_done')) {
+          // Already did first check, skip directly to verification
+          window.location.href = window.location.href + (window.location.href.includes('?') ? '&' : '?') + '_ab_skip=1';
+        } else {
+          sessionStorage.setItem('antibot_first_check_done', '1');
+          
+          // Force send behavioral data and wait for completion before reload
+          setTimeout(async function() {
+            if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
+              // Send data and wait a bit for it to complete
+              window.behaviorTracker.sendToServer();
+              // Wait 500ms for sendBeacon to complete
+              await new Promise(resolve => setTimeout(resolve, 600));
+            }
+            // After data is sent, navigate to same URL to trigger analysis
+            window.location.href = window.location.href;
+          }, 4400);
+        }
       </script>
     </body>
     </html>
@@ -2830,7 +2838,8 @@ if ($is_first_visit) {
 }
 
 // Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
-if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
+// Also check for the skip parameter as a fallback in case cookies aren't working
+if ((isset($_COOKIE['analysis_done']) || isset($_GET['_ab_skip'])) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
     // Check if we have sufficient behavioral data before analyzing
     $behavior_data = load_behavior_data();
     $ip_data = $behavior_data[$client_ip] ?? [];
@@ -2854,8 +2863,8 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         $dynamic_fp = generate_dynamic_fingerprint($client_ip);
         save_fingerprint($client_ip, $dynamic_fp);
         
-        // Set cookies to prevent loop and show verification
-        setcookie('js_verified', 'pending', time() + 300, '/'); // 5 minute temporary
+        // Don't set any cookies yet - let the verification page handle that
+        // Just create the analysis result to show verification page
         
         // Show verification page - will be handled by the uncertain case below
         $bot_analysis = [
