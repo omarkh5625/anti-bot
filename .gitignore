@@ -1,0 +1,33 @@
+# Anti-Bot Runtime Files
+# These files are created automatically by the system
+
+# Storage files (auto-generated at runtime)
+ja3_tracking.json
+entropy_memory.json
+fingerprints.json
+behavior_tracking.json
+nonces.json
+blocked_ips.json
+
+# Log files
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
