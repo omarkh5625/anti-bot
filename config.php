@@ -30,7 +30,8 @@ return [
     
     // Secret salt for fingerprinting (MUST be unique per installation)
     // Generate with: openssl rand -hex 32
-    'fingerprint_salt' => hash('sha256', __DIR__ . time()),  // CHANGE THIS IN PRODUCTION!
+    // WARNING: This default is INSECURE - generate a new one immediately!
+    'fingerprint_salt' => getenv('ANTIBOT_SALT') ?: bin2hex(random_bytes(32)),  // Auto-generate secure random salt
     
     // ============================================
     // DETECTION THRESHOLDS

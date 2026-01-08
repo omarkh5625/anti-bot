@@ -14,6 +14,14 @@
     'use strict';
     
     // ============================================
+    // CONSTANTS
+    // ============================================
+    
+    // Blank canvas data URL for bot detection
+    // This is the base64-encoded image of a 1x1 transparent PNG
+    const BLANK_CANVAS_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==';
+    
+    // ============================================
     // ADVANCED BOT DETECTION - Selenium/WebDriver/Stealth
     // ============================================
     
@@ -277,7 +285,7 @@
                 const canvasData = canvas.toDataURL();
                 
                 // Check for blank canvas (common in bots)
-                if (canvasData === 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==') {
+                if (canvasData === BLANK_CANVAS_DATA_URL) {
                     flags.push('canvas_blank_output');
                 }
                 

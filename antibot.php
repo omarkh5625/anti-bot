@@ -454,11 +454,20 @@ function generate_ja3_fingerprint() {
     
     // 3. Header ordering fingerprint (browsers have consistent header order)
     $header_order = [];
-    $all_headers = getallheaders();
-    if ($all_headers) {
-        foreach (array_keys($all_headers) as $header) {
-            // Normalize header names
-            $header_order[] = strtolower(str_replace('-', '_', $header));
+    if (function_exists('getallheaders')) {
+        $all_headers = getallheaders();
+        if ($all_headers) {
+            foreach (array_keys($all_headers) as $header) {
+                // Normalize header names
+                $header_order[] = strtolower(str_replace('-', '_', $header));
+            }
+        }
+    } else {
+        // Fallback: use $_SERVER array
+        foreach ($_SERVER as $key => $value) {
+            if (strpos($key, 'HTTP_') === 0) {
+                $header_order[] = strtolower($key);
+            }
         }
     }
     $components[] = implode(',', $header_order);
@@ -1586,8 +1595,9 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
     // Silent rate limiting
     if ($tactics['silent_rate_limit'] ?? false) {
         if (!check_shadow_rate_limit($ip)) {
-            // Silently slow down the bot with artificial delay (non-blocking)
-            // Use usleep instead of sleep to avoid blocking for too long
+            // Silently slow down the bot with artificial delay
+            // Note: This intentionally blocks to waste bot resources
+            // Use shorter delays if performance is a concern
             $delay_ms = rand(2000, 5000); // 2-5 seconds in milliseconds
             usleep($delay_ms * 1000); // Convert to microseconds
             // Still continue to show fake success
@@ -1595,6 +1605,7 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
     }
     
     // Apply response delay to waste bot resources
+    // Note: This is intentional for bot deterrence
     if (isset($tactics['response_delay_min']) && isset($tactics['response_delay_max'])) {
         $delay_ms = rand($tactics['response_delay_min'], $tactics['response_delay_max']);
         usleep($delay_ms * 1000); // Convert ms to microseconds
