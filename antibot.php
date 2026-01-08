@@ -1,5 +1,61 @@
 <?php
 
+/**
+ * Advanced Anti-Bot Detection System
+ * 
+ * SYSTEM PHILOSOPHY 🧠:
+ * - Do not detect bots; detect inhuman behavior
+ * - Do not ask for proof; observe consistency  
+ * - Do not inconvenience users; exhaust bots
+ * - Humans are noisy; bots are perfect - REJECT PERFECTION
+ * 
+ * MANDATORY RULES (Non-Negotiable):
+ * 
+ * 1️⃣ TLS/JA3 Mandatory:
+ *    - Store TLS fingerprint (JA3) upon first request
+ *    - Terminate signature immediately on JA3 change during session (silent)
+ *    - Track JA3 reuse across sessions for cumulative risk
+ *    - Neutralizes Playwright Stealth and automation
+ * 
+ * 2️⃣ Entropy Memory (Time-Based):
+ *    - Store average time variance per fingerprint
+ *    - Compare across multiple sessions (not just within one)
+ *    - Consistent timing + minimal variation = Automation
+ *    - No reliance on mouse or buttons, purely timing and physics
+ * 
+ * 3️⃣ Always Punish Perfection:
+ *    - Excessive consistency = bot
+ *    - Lack of hesitation = bot
+ *    - Uniform responses = bot
+ *    - Increase risk even with clean IPs
+ *    - Humans are noisy; bots are perfect
+ * 
+ * 4️⃣ Silent Session Aging:
+ *    - Automatically lower confidence for long sessions
+ *    - Re-sign with new nonce
+ *    - Delay responses if renewal fails
+ *    - Reduce quality WITHOUT CAPTCHA
+ *    - Let humans pass, exhaust/break bots
+ * 
+ * 5️⃣ Lightweight Deception:
+ *    - Provide correct-looking but meaningless responses
+ *    - Non-uniform delays
+ *    - Light throttling
+ *    - NO phantom pages or fake elements
+ *    - Poison ML without harming UX
+ * 
+ * 6️⃣ Anti-Learning:
+ *    - Randomize check order
+ *    - Unpredictable weights within session
+ *    - Randomize evaluation windows
+ *    - Static logic is learnable = unacceptable
+ * 
+ * 7️⃣ Beyond Mouse Dependency:
+ *    - Non-movement ≠ bot
+ *    - Focus: timing variance, request spacing, network jitter, drift
+ *    - Works on static pages
+ */
+
 $uri = $_SERVER['REQUEST_URI'] ?? '';
 $basename = basename(parse_url($uri, PHP_URL_PATH));
 $is_js_fetch = isset($_SERVER['HTTP_SEC_FETCH_MODE']) && $_SERVER['HTTP_SEC_FETCH_MODE'] === 'cors';

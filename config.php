@@ -3,9 +3,13 @@
 /**
  * Anti-Bot Detection System Configuration
  * 
- * SINGLE FILE
- * NO ENV
- * ALL HASHES INCLUDED
+ * SYSTEM PHILOSOPHY:
+ * - Do not detect bots; detect inhuman behavior
+ * - Do not ask for proof; observe consistency
+ * - Do not inconvenience users; exhaust bots
+ * - Humans are noisy; bots are perfect - REJECT PERFECTION
+ * 
+ * SINGLE FILE - NO ENV - ALL HASHES INCLUDED
  */
 
 $BASE_SECRET = hash(
