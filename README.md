@@ -208,23 +208,110 @@ All events are logged to the configured log file:
 4. **Fast Performance**: Minimal impact on page load and responsiveness
 5. **Familiar Interface**: When verification is needed, use recognizable patterns
 
+## Admin Monitoring Dashboard
+
+### Access the Dashboard
+
+Navigate to `admin-monitor.php` to access the comprehensive monitoring dashboard:
+
+```
+https://yourdomain.com/admin-monitor.php
+```
+
+**Default Password**: `admin123` (⚠️ **CHANGE THIS IN PRODUCTION!**)
+
+Change the password in `admin-monitor.php`:
+```php
+define('ADMIN_PASSWORD', 'your_secure_password_here');
+```
+
+### Dashboard Features
+
+#### Real-Time Statistics
+- **Total Attempts**: All access attempts tracked
+- **Humans**: Confident human users (< 20% bot score) - direct access
+- **Uncertain**: Users shown CAPTCHA (20-57% bot score)
+- **Bots Blocked**: High-confidence bots (≥ 57% bot score)
+- **Automation Blocked**: Selenium, Puppeteer, Playwright, etc.
+- **Detection Rate**: Percentage of blocked vs total attempts
+- **Today/Last Hour**: Recent activity metrics
+
+#### Access History (Last 50 Attempts)
+View complete history with:
+- Timestamp
+- IP Address
+- Verdict (Human, Bot, Uncertain, Automation)
+- Bot Score (%)
+- User Agent
+- Detailed breakdown button
+
+#### Detailed View Modal
+Click "عرض التفاصيل" (View Details) on any entry to see:
+
+**Bot Characteristics Tested:**
+- Number of sessions
+- Timing patterns (e.g., "Perfect 50ms intervals")
+- Error rate percentage
+- UI interaction behavior
+- Session gap analysis
+
+**Detection Domain Scores:**
+- ⏱️ Temporal Behavior (30% weight)
+- 🎯 Interaction Noise (25% weight)
+- 🎨 UI Semantics (25% weight)
+- 🔄 Session Continuity (20% weight)
+
+**Detection Flags Raised:**
+- List of specific bot indicators detected
+- Automation tools identified (for automation blocks)
+
+**Full User Agent String**
+
+### Dashboard Screenshots
+
+**Login Page:**
+![Admin Login](https://github.com/user-attachments/assets/1b6049d5-d5bb-4495-9729-14720182cc4d)
+
+**Main Dashboard:**
+![Admin Dashboard](https://github.com/user-attachments/assets/1dba6cbe-ba71-42c7-9969-5c3c0dfc8e7a)
+
+**Bot Details View:**
+![Bot Details](https://github.com/user-attachments/assets/c9650d32-5156-4b75-9a98-822efcf04873)
+
+**Automation Detection:**
+![Automation Detection](https://github.com/user-attachments/assets/e04fbd2b-90a2-4f22-813d-ab47a31cda7f)
+
+### Auto-Refresh
+
+The dashboard automatically refreshes every 30 seconds to show the latest data. You can also manually refresh using the "🔄 تحديث" button.
+
+### Security Notes
+
+1. **Change Default Password**: The default password `admin123` should be changed immediately in production
+2. **Access Control**: Consider adding IP whitelist or additional authentication
+3. **HTTPS Required**: Always use HTTPS in production to protect admin credentials
+4. **Session Security**: Dashboard uses PHP sessions with secure settings
+
 ## Best Practices
 
 ### For Protected Sites
 
 1. **Include tracking script on all pages** for comprehensive behavioral data
-2. **Monitor logs regularly** to tune detection thresholds
-3. **Whitelist known IPs** (office, testing, etc.)
-4. **Test with real users** to avoid false positives
-5. **Keep behavior data** for at least 7 days for pattern analysis
+2. **Monitor admin dashboard regularly** to tune detection thresholds
+3. **Review bot characteristics** to understand attack patterns
+4. **Whitelist known IPs** (office, testing, etc.)
+5. **Test with real users** to avoid false positives
+6. **Keep behavior data** for at least 7 days for pattern analysis
+7. **Check automation blocks** to identify sophisticated bot tools
 
 ### For Developers
 
 1. **Test in different browsers** and devices
-2. **Monitor false positive rates** from logs
+2. **Monitor false positive rates** from admin dashboard
 3. **Adjust domain weights** based on your traffic patterns
 4. **Clear behavior data periodically** to avoid storage issues
 5. **Use debug mode** (?debug=antibot) during development
+6. **Review access logs** in the admin panel for insights
 
 ## Debug Mode
 

@@ -15,12 +15,28 @@ if ($basename === 'antibot-report.php' && $_SERVER['REQUEST_METHOD'] === 'POST')
             @mkdir($log_dir, 0755, true);
         }
         
+        $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
         $log_entry = date('Y-m-d H:i:s') . ' | AUTOMATION DETECTED | IP: ' . 
-                     ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . 
+                     $client_ip . 
                      ' | Flags: ' . implode(', ', $report['flags'] ?? []) . 
                      ' | Score: ' . ($report['score'] ?? 0) . "\n";
         
         file_put_contents($log_dir . '/automation.log', $log_entry, FILE_APPEND);
+        
+        // Log to admin dashboard
+        if (defined('ACCESS_LOG_FILE')) {
+            $bot_analysis = [
+                'confidence' => $report['score'] ?? 100,
+                'reasons' => $report['flags'] ?? [],
+                'domain_scores' => [
+                    'temporal' => 0,
+                    'noise' => 0,
+                    'semantics' => 0,
+                    'continuity' => 0
+                ]
+            ];
+            log_access_attempt($client_ip, 'automation', $report['score'] ?? 100, $bot_analysis, [], $report['flags'] ?? []);
+        }
         
         // Block this IP immediately
         http_response_code(403);
@@ -40,6 +56,7 @@ if (
 
 define('FP_FILE', __DIR__ . '/fingerprints.json');
 define('BEHAVIOR_FILE', __DIR__ . '/behavior_tracking.json');
+define('ACCESS_LOG_FILE', __DIR__ . '/logs/access_log.json');
 
 // Behavioral analysis thresholds (in milliseconds unless noted)
 define('MIN_HUMAN_ACTION_TIME', 100);        // Minimum time between actions for humans (ms)
@@ -74,6 +91,45 @@ function save_fingerprint($ip, $hash) {
 function get_fingerprint_for_ip($ip) {
     $fps = load_fingerprints();
     return $fps[$ip] ?? null;
+}
+
+// Admin monitoring - Log access attempt with full details
+function log_access_attempt($ip, $verdict, $bot_score, $bot_analysis, $characteristics = [], $automation_flags = []) {
+    if (!defined('ACCESS_LOG_FILE')) {
+        return; // Skip if not defined
+    }
+    
+    // Load existing logs
+    $logs = [];
+    if (file_exists(ACCESS_LOG_FILE)) {
+        $content = file_get_contents(ACCESS_LOG_FILE);
+        $logs = json_decode($content, true) ?: [];
+    }
+    
+    // Create log entry
+    $entry = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'ip' => $ip,
+        'verdict' => $verdict, // 'human', 'bot', 'uncertain', 'automation'
+        'bot_score' => round($bot_score, 2),
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown',
+        'characteristics' => $characteristics,
+        'domain_scores' => [
+            'temporal' => $bot_analysis['domain_scores']['temporal'] ?? 0,
+            'interaction' => $bot_analysis['domain_scores']['noise'] ?? 0,
+            'semantics' => $bot_analysis['domain_scores']['semantics'] ?? 0,
+            'continuity' => $bot_analysis['domain_scores']['continuity'] ?? 0
+        ],
+        'flags' => $bot_analysis['reasons'] ?? [],
+        'automation_flags' => $automation_flags
+    ];
+    
+    // Add to logs (keep last 1000 entries)
+    $logs[] = $entry;
+    $logs = array_slice($logs, -1000);
+    
+    // Save logs
+    file_put_contents(ACCESS_LOG_FILE, json_encode($logs, JSON_PRETTY_PRINT));
 }
 
 // Behavioral tracking functions
@@ -819,11 +875,91 @@ if ($is_first_visit) {
 if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
     $bot_analysis = calculate_bot_confidence($client_ip);
     
+    // Extract bot characteristics for logging
+    $behavior_data = load_behavior_data();
+    $ip_data = $behavior_data[$client_ip] ?? [];
+    $characteristics = [];
+    
+    if (isset($ip_data['sessions'])) {
+        $sessions = $ip_data['sessions'];
+        $characteristics['sessions'] = count($sessions);
+        
+        // Analyze timing patterns
+        $all_actions = [];
+        foreach ($sessions as $session) {
+            if (isset($session['actions'])) {
+                $all_actions = array_merge($all_actions, $session['actions']);
+            }
+        }
+        
+        if (count($all_actions) > 1) {
+            $intervals = [];
+            for ($i = 1; $i < count($all_actions); $i++) {
+                $intervals[] = $all_actions[$i]['timestamp'] - $all_actions[$i-1]['timestamp'];
+            }
+            if (!empty($intervals)) {
+                $avg_interval = array_sum($intervals) / count($intervals);
+                $characteristics['timing_pattern'] = $avg_interval < 100 ? 
+                    "Perfect {$avg_interval}ms intervals (mathematical precision)" : 
+                    "Variable timing (human-like)";
+            }
+        }
+        
+        // Error rate
+        $errors = 0;
+        foreach ($sessions as $session) {
+            if (isset($session['actions'])) {
+                foreach ($session['actions'] as $action) {
+                    if ($action['type'] === 'input_correction' || $action['type'] === 'click_cancel') {
+                        $errors++;
+                    }
+                }
+            }
+        }
+        $characteristics['error_rate'] = count($all_actions) > 0 ? round(($errors / count($all_actions)) * 100, 1) : 0;
+        $characteristics['error_rate'] .= $errors === 0 ? '% (no human mistakes)' : '% (natural errors)';
+        
+        // UI interaction
+        $decorative_clicks = 0;
+        $functional_clicks = 0;
+        foreach ($sessions as $session) {
+            if (isset($session['actions'])) {
+                foreach ($session['actions'] as $action) {
+                    if ($action['type'] === 'click') {
+                        if (isset($action['target_type']) && $action['target_type'] === 'decorative') {
+                            $decorative_clicks++;
+                        } else {
+                            $functional_clicks++;
+                        }
+                    }
+                }
+            }
+        }
+        $characteristics['ui_interaction'] = $decorative_clicks === 0 && $functional_clicks > 0 ? 
+            'Ignores ALL decorative elements' : 
+            'Natural interaction with UI';
+        
+        // Session gaps
+        if (count($sessions) > 1) {
+            $gaps = [];
+            for ($i = 1; $i < count($sessions); $i++) {
+                $gap = $sessions[$i]['start_time'] - $sessions[$i-1]['end_time'];
+                $gaps[] = $gap;
+            }
+            $avg_gap = array_sum($gaps) / count($gaps);
+            $characteristics['session_gaps'] = $avg_gap < 3 ? 
+                "< 3 seconds (inhuman speed)" : 
+                ">= 3 seconds (normal)";
+        }
+    }
+    
     // Block likely bots immediately - redirect to a famous website
     if ($bot_analysis['is_likely_bot']) {
         $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
         // Log the block
         file_put_contents($LOG_FILE, date("Y-m-d H:i:s") . " | BLOCKED | IP: {$client_ip} | UA: {$user_agent} | Reason: {$reason}\n", FILE_APPEND);
+        // Log to admin dashboard
+        log_access_attempt($client_ip, 'bot', $bot_analysis['confidence'], $bot_analysis, $characteristics);
         // Redirect bots to a well-known site instead of showing block page
         header("Location: https://www.google.com");
         exit;
@@ -833,11 +969,15 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
     if ($bot_analysis['is_confident_human']) {
         setcookie('js_verified', 'yes', time() + 86400, '/');
         setcookie('fp_hash', 'human', time() + 86400, '/');
+        // Log to admin dashboard
+        log_access_attempt($client_ip, 'human', $bot_analysis['confidence'], $bot_analysis, $characteristics);
         // Allow the page to continue loading - no exit, no redirect
     }
     
     // Show warning UI only for uncertain cases
     if ($bot_analysis['is_uncertain']) {
+        // Log to admin dashboard
+        log_access_attempt($client_ip, 'uncertain', $bot_analysis['confidence'], $bot_analysis, $characteristics);
         // Show CAPTCHA page
         ?>
         <!DOCTYPE html>
