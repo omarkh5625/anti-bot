@@ -68,6 +68,46 @@ function load_fingerprints() {
 }
 
 /**
+ * Extract network subnet from IP address
+ * Supports IPv4 (first 3 octets) and basic IPv6 handling
+ */
+function extract_subnet($ip) {
+    // Check if IPv6
+    if (strpos($ip, ':') !== false) {
+        // For IPv6, use first 4 segments (simplified subnet)
+        $parts = explode(':', $ip);
+        return implode(':', array_slice($parts, 0, min(4, count($parts)))) . '::';
+    }
+    
+    // IPv4: first 3 octets
+    $ip_parts = explode('.', $ip);
+    if (count($ip_parts) !== 4) {
+        // Invalid IP format, return as-is
+        return $ip;
+    }
+    return implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+}
+
+/**
+ * Get secret salt for fingerprinting
+ * Should be unique per installation and rotated periodically
+ */
+function get_fingerprint_salt() {
+    global $config;
+    
+    // Try to get from config first
+    if (isset($config['fingerprint_salt']) && !empty($config['fingerprint_salt'])) {
+        return $config['fingerprint_salt'];
+    }
+    
+    // Fallback: generate from server-specific data
+    // Note: This should be set in config.php for production
+    $server_unique = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    $server_unique .= $_SERVER['DOCUMENT_ROOT'] ?? __DIR__;
+    return hash('sha256', $server_unique . 'antibot_fallback_salt');
+}
+
+/**
  * Generate dynamic salted fingerprint with session-network binding
  * Prevents static replayable fingerprints by incorporating:
  * - Dynamic timestamp-based salt (rotates every hour)
@@ -76,8 +116,8 @@ function load_fingerprints() {
  * - TLS/HTTP header entropy
  */
 function generate_dynamic_fingerprint($ip, $session_id = null) {
-    // Dynamic salt that rotates every hour
-    $hour_salt = hash('sha256', date('YmdH') . 'antibot_secret_salt');
+    // Dynamic salt that rotates every hour using config-based secret
+    $hour_salt = hash('sha256', date('YmdH') . get_fingerprint_salt());
     
     // Session binding - use actual session ID or generate one
     if ($session_id === null) {
@@ -87,9 +127,8 @@ function generate_dynamic_fingerprint($ip, $session_id = null) {
         $session_id = session_id();
     }
     
-    // Network binding - extract subnet (first 3 octets for IPv4)
-    $ip_parts = explode('.', $ip);
-    $subnet = implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+    // Network binding - extract subnet with IPv4/IPv6 support
+    $subnet = extract_subnet($ip);
     
     // TLS/HTTP header entropy analysis
     $header_entropy = calculate_header_entropy();
@@ -145,8 +184,7 @@ function verify_session_binding($ip, $stored_fingerprint) {
     $current_fingerprint = generate_dynamic_fingerprint($ip);
     
     // For session binding, we verify the subnet hasn't changed
-    $ip_parts = explode('.', $ip);
-    $current_subnet = implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+    $current_subnet = extract_subnet($ip);
     
     // Check if stored fingerprint data exists
     $fps = load_fingerprints();
@@ -167,8 +205,7 @@ function save_fingerprint($ip, $hash, $session_id = null) {
     $fps = load_fingerprints();
     
     // Store fingerprint with metadata for binding verification
-    $ip_parts = explode('.', $ip);
-    $subnet = implode('.', array_slice($ip_parts, 0, 3)) . '.0';
+    $subnet = extract_subnet($ip);
     
     $fps[$ip] = [
         'hash' => $hash,

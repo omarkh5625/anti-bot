@@ -23,6 +23,11 @@ return [
     // ProxyCheck risk threshold (0-100, higher = more strict)
     'proxycheck_risk_threshold' => 75,
     
+    // Fingerprint salt - IMPORTANT: Change this to a random string
+    // This is used for cryptographic fingerprinting
+    // Generate a random string: openssl rand -base64 32
+    'fingerprint_salt' => '',  // CHANGE THIS: Add a random 32+ character string
+    
     // Neutrino API credentials (https://www.neutrinoapi.com/)
     // Sign up for free tier: 25 requests/day
     'user_id' => '',  // Your Neutrino User ID
