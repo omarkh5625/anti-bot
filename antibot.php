@@ -2763,130 +2763,19 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 $is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
 
 if ($is_first_visit) {
-    // First visit: Show analysis page to collect behavioral data
-    // Set cookie WITHOUT httponly so JavaScript can verify it was set
+    // First visit: Redirect to separate security check page to avoid output buffer issues
+    // This allows the application code to run cleanly after security check completes
     setcookie('analysis_done', 'yes', time() + 86400, '/');
-    ?>
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <title>Security Check</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <style>
-        body {
-          margin: 0;
-          padding: 0;
-          height: 100vh;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          background: #f8f9fa;
-          font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-        }
-        .analysis-container {
-          text-align: center;
-          padding: 40px;
-        }
-        .spinner {
-          width: 50px;
-          height: 50px;
-          margin: 0 auto 20px;
-          border: 4px solid #e0e0e0;
-          border-top: 4px solid #007bff;
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        .message {
-          font-size: 18px;
-          color: #333;
-          margin-bottom: 10px;
-        }
-        .submessage {
-          font-size: 14px;
-          color: #666;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="analysis-container">
-        <div class="spinner"></div>
-        <div class="message">Checking your connection security...</div>
-        <div class="submessage">This will only take a moment</div>
-      </div>
-      <!-- Include behavioral tracking script -->
-      <script src="antibot-tracking.js"></script>
-      <script>
-        // Store original URL
-        try {
-          localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
-        } catch(e) {}
-        
-        // Function to check if enough behavioral data has been collected
-        function checkBehavioralData() {
-          // Check if tracker has collected sufficient actions
-          if (window.behaviorTracker) {
-            const sessionData = window.behaviorTracker.getSessionData ? window.behaviorTracker.getSessionData() : null;
-            if (sessionData && sessionData.actions && sessionData.actions.length >= 3) {
-              return true; // Sufficient data
-            }
-          }
-          return false;
-        }
-        
-        // Wait for behavioral data collection with dynamic timing
-        let attempts = 0;
-        const maxAttempts = 10; // Maximum 5 seconds (10 * 500ms)
-        
-        const checkInterval = setInterval(async function() {
-          attempts++;
-          
-          // Check if we have enough data OR reached timeout
-          if (checkBehavioralData() || attempts >= maxAttempts) {
-            clearInterval(checkInterval);
-            
-            // Send data
-            if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
-              window.behaviorTracker.sendToServer();
-              // Wait for sendBeacon to complete
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-            
-            // Verify cookie was set by PHP
-            let cookieSet = document.cookie.indexOf('analysis_done=yes') !== -1;
-            
-            // If cookie not set by PHP, try setting it via JavaScript as fallback
-            if (!cookieSet) {
-              document.cookie = 'analysis_done=yes; path=/; max-age=86400';
-              // Verify it was set
-              cookieSet = document.cookie.indexOf('analysis_done=yes') !== -1;
-            }
-            
-            // Only proceed if cookie is confirmed set
-            if (cookieSet) {
-              // After data is sent, reload the current page to trigger analysis
-              // Don't use stored URL to allow application's natural URL transformations
-              window.location.reload();
-            } else {
-              // Cookies blocked - show error message
-              document.querySelector('.message').textContent = 'Please enable cookies to continue';
-              document.querySelector('.submessage').textContent = 'Cookies are required for security verification';
-              document.querySelector('.spinner').style.display = 'none';
-            }
-          }
-        }, 500); // Check every 500ms
-      </script>
-    </body>
-    </html>
-    <?php
-    // DO NOT exit - allow application code to run after security check display
-    // The page will reload after data collection, and analysis happens on next request
-    log_access_attempt($client_ip, 'first_visit_check_shown', 0, ['note' => 'Security check shown, continuing to app code'], []);
-    // No exit here - page continues
+    
+    // Log the first visit
+    log_access_attempt($client_ip, 'first_visit_redirect', 0, ['note' => 'Redirecting to security check page'], []);
+    
+    // Get the current request URI to return to after check
+    $return_url = $_SERVER['REQUEST_URI'];
+    
+    // Redirect to security check page with return URL
+    header('Location: antibot-check.php?return=' . urlencode($return_url));
+    exit;
 }
 
 // Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
