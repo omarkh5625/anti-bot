@@ -1,5 +1,61 @@
 <?php
 
+/**
+ * Advanced Anti-Bot Detection System
+ * 
+ * SYSTEM PHILOSOPHY 🧠:
+ * - Do not detect bots; detect inhuman behavior
+ * - Do not ask for proof; observe consistency  
+ * - Do not inconvenience users; exhaust bots
+ * - Humans are noisy; bots are perfect - REJECT PERFECTION
+ * 
+ * MANDATORY RULES (Non-Negotiable):
+ * 
+ * 1️⃣ TLS/JA3 Mandatory:
+ *    - Store TLS fingerprint (JA3) upon first request
+ *    - Terminate signature immediately on JA3 change during session (silent)
+ *    - Track JA3 reuse across sessions for cumulative risk
+ *    - Neutralizes Playwright Stealth and automation
+ * 
+ * 2️⃣ Entropy Memory (Time-Based):
+ *    - Store average time variance per fingerprint
+ *    - Compare across multiple sessions (not just within one)
+ *    - Consistent timing + minimal variation = Automation
+ *    - No reliance on mouse or buttons, purely timing and physics
+ * 
+ * 3️⃣ Always Punish Perfection:
+ *    - Excessive consistency = bot
+ *    - Lack of hesitation = bot
+ *    - Uniform responses = bot
+ *    - Increase risk even with clean IPs
+ *    - Humans are noisy; bots are perfect
+ * 
+ * 4️⃣ Silent Session Aging:
+ *    - Automatically lower confidence for long sessions
+ *    - Re-sign with new nonce
+ *    - Delay responses if renewal fails
+ *    - Reduce quality WITHOUT CAPTCHA
+ *    - Let humans pass, exhaust/break bots
+ * 
+ * 5️⃣ Lightweight Deception:
+ *    - Provide correct-looking but meaningless responses
+ *    - Non-uniform delays
+ *    - Light throttling
+ *    - NO phantom pages or fake elements
+ *    - Poison ML without harming UX
+ * 
+ * 6️⃣ Anti-Learning:
+ *    - Randomize check order
+ *    - Unpredictable weights within session
+ *    - Randomize evaluation windows
+ *    - Static logic is learnable = unacceptable
+ * 
+ * 7️⃣ Beyond Mouse Dependency:
+ *    - Non-movement ≠ bot
+ *    - Focus: timing variance, request spacing, network jitter, drift
+ *    - Works on static pages
+ */
+
 $uri = $_SERVER['REQUEST_URI'] ?? '';
 $basename = basename(parse_url($uri, PHP_URL_PATH));
 $is_js_fetch = isset($_SERVER['HTTP_SEC_FETCH_MODE']) && $_SERVER['HTTP_SEC_FETCH_MODE'] === 'cors';
@@ -505,8 +561,69 @@ function generate_ja3_fingerprint() {
 }
 
 /**
+ * Track cumulative JA3 reuse across sessions (Silent Risk)
+ * Detects if same JA3 is used by many different sessions
+ */
+function track_ja3_cumulative_reuse($ja3) {
+    global $config;
+    
+    if (!($config['tls_fingerprinting']['track_cumulative_reuse'] ?? false)) {
+        return;
+    }
+    
+    $ja3_tracking_file = __DIR__ . '/ja3_tracking.json';
+    $ja3_data = [];
+    
+    if (file_exists($ja3_tracking_file)) {
+        $ja3_data = json_decode(file_get_contents($ja3_tracking_file), true) ?: [];
+    }
+    
+    if (!isset($ja3_data[$ja3])) {
+        $ja3_data[$ja3] = [
+            'first_seen' => time(),
+            'session_count' => 0,
+            'ip_addresses' => []
+        ];
+    }
+    
+    $ja3_data[$ja3]['session_count']++;
+    $ja3_data[$ja3]['last_seen'] = time();
+    
+    // Track unique IPs using this JA3
+    $client_ip = get_client_ip();
+    if (!in_array($client_ip, $ja3_data[$ja3]['ip_addresses'])) {
+        $ja3_data[$ja3]['ip_addresses'][] = $client_ip;
+    }
+    
+    // Cleanup old entries (older than 7 days)
+    $cutoff = time() - (7 * 86400);
+    foreach ($ja3_data as $ja3_hash => $data) {
+        if (($data['last_seen'] ?? 0) < $cutoff) {
+            unset($ja3_data[$ja3_hash]);
+        }
+    }
+    
+    file_put_contents($ja3_tracking_file, json_encode($ja3_data, JSON_PRETTY_PRINT));
+    
+    // Log if threshold exceeded (Silent Risk)
+    $threshold = $config['tls_fingerprinting']['cumulative_reuse_threshold'] ?? 10;
+    if ($ja3_data[$ja3]['session_count'] >= $threshold) {
+        if (is_dir(__DIR__ . '/logs')) {
+            file_put_contents(
+                __DIR__ . '/logs/security.log',
+                date('Y-m-d H:i:s') . " | JA3_CUMULATIVE_RISK | JA3: " . substr($ja3, 0, 16) . 
+                "... | Sessions: " . $ja3_data[$ja3]['session_count'] . 
+                " | Unique IPs: " . count($ja3_data[$ja3]['ip_addresses']) . "\n",
+                FILE_APPEND
+            );
+        }
+    }
+}
+
+/**
  * Verify JA3 fingerprint match for session
  * Detects if TLS fingerprint changed (session hijacking indicator)
+ * TERMINATES SESSION SILENTLY on mismatch if configured
  */
 function verify_ja3_match($ip, $stored_fingerprint_data) {
     global $config;
@@ -522,6 +639,9 @@ function verify_ja3_match($ip, $stored_fingerprint_data) {
         return true; // Can't verify, allow
     }
     
+    // Track cumulative JA3 reuse
+    track_ja3_cumulative_reuse($current_ja3);
+    
     // Check if stored fingerprint has JA3 data
     if (!isset($stored_fingerprint_data['ja3'])) {
         return true; // First time, no comparison possible
@@ -531,7 +651,7 @@ function verify_ja3_match($ip, $stored_fingerprint_data) {
     
     // Compare JA3 fingerprints
     if ($current_ja3 !== $stored_ja3) {
-        // JA3 mismatch detected - possible session hijacking or different client
+        // JA3 mismatch detected - possible Playwright Stealth or automation
         
         // Log this security event
         if (is_dir(__DIR__ . '/logs')) {
@@ -542,6 +662,20 @@ function verify_ja3_match($ip, $stored_fingerprint_data) {
                 "Current: " . substr($current_ja3, 0, 16) . "...\n",
                 FILE_APPEND
             );
+        }
+        
+        // MANDATORY: Terminate signature immediately if configured
+        if ($config['tls_fingerprinting']['terminate_on_change'] ?? true) {
+            // Clear all verification cookies silently
+            setcookie('fp_hash', '', time() - 3600, '/');
+            setcookie('js_verified', '', time() - 3600, '/');
+            setcookie('analysis_done', '', time() - 3600, '/');
+            setcookie('behavior_verified', '', time() - 3600, '/');
+            
+            // End session silently - no explicit messages
+            // Redirect to a neutral page or show loading indefinitely
+            http_response_code(403);
+            exit; // Silent termination
         }
         
         return false; // Mismatch
@@ -725,6 +859,7 @@ function save_behavior_data($data) {
 /**
  * Calculate session trust score based on age
  * Trust decreases over time to force periodic re-evaluation
+ * PHILOSOPHY: Let humans pass, exhaust/break bots
  */
 function calculate_session_trust($session_start_time, $config) {
     $now = time();
@@ -732,6 +867,15 @@ function calculate_session_trust($session_start_time, $config) {
     
     // Get decay rate from config (default 5% per hour)
     $decay_rate_per_hour = $config['session_trust_decay_rate'] ?? 5;
+    
+    // Check if this is a long session (different decay rate)
+    $silent_aging = $config['silent_aging'] ?? [];
+    $long_session_threshold = $silent_aging['long_session_threshold'] ?? 7200;
+    
+    if ($session_age > $long_session_threshold && ($silent_aging['enabled'] ?? true)) {
+        // Long session - apply accelerated decay
+        $decay_rate_per_hour = $silent_aging['confidence_decay_rate'] ?? 10;
+    }
     
     // Calculate hours elapsed
     $hours_elapsed = $session_age / 3600;
@@ -750,6 +894,113 @@ function calculate_session_trust($session_start_time, $config) {
     }
     
     return $trust;
+}
+
+/**
+ * Silent session aging mechanism
+ * Automatically lower confidence for long sessions
+ * Apply response delays and reduce quality without CAPTCHA
+ * Returns: 'allow', 'delay', 'renew', or 'terminate'
+ */
+function apply_silent_aging($ip, $config) {
+    $silent_aging = $config['silent_aging'] ?? [];
+    
+    if (!($silent_aging['enabled'] ?? true)) {
+        return 'allow';
+    }
+    
+    // Get fingerprint data for session age
+    $fp_data = get_fingerprint_for_ip($ip);
+    if (!$fp_data || !isset($fp_data['created_at'])) {
+        return 'allow'; // No session data
+    }
+    
+    $session_age = time() - $fp_data['created_at'];
+    $long_session_threshold = $silent_aging['long_session_threshold'] ?? 7200;
+    
+    // Not a long session yet
+    if ($session_age < $long_session_threshold) {
+        return 'allow';
+    }
+    
+    // Calculate current trust
+    $trust = calculate_session_trust($fp_data['created_at'], $config);
+    
+    // If trust very low, attempt silent renewal
+    if ($trust < 30) {
+        // Try to renew session with new nonce
+        if ($silent_aging['auto_renew_nonce'] ?? true) {
+            $renewal_success = attempt_silent_session_renewal($ip, $fp_data, $config);
+            
+            if (!$renewal_success) {
+                // Renewal failed - apply degradation
+                
+                // Apply response delay (waste bot resources)
+                if (isset($silent_aging['delay_on_renewal_fail'])) {
+                    $delay_range = $silent_aging['delay_on_renewal_fail'];
+                    $delay_ms = rand($delay_range[0], $delay_range[1]);
+                    usleep($delay_ms * 1000);
+                }
+                
+                // Signal to reduce response quality
+                if ($silent_aging['reduce_quality_on_fail'] ?? true) {
+                    return 'delay'; // Caller should apply quality reduction
+                }
+            } else {
+                // Renewal successful
+                return 'renew';
+            }
+        }
+    }
+    
+    // Trust still acceptable
+    if ($trust >= 30) {
+        return 'allow';
+    }
+    
+    // Trust too low and renewal failed
+    return 'delay';
+}
+
+/**
+ * Attempt silent session renewal
+ * Re-sign session with new nonce and updated fingerprint
+ * Returns true if renewal successful, false otherwise
+ */
+function attempt_silent_session_renewal($ip, $old_fp_data, $config) {
+    // Verify current session is still valid
+    $binding_valid = verify_session_binding($ip, $old_fp_data['hash'] ?? '');
+    
+    if (!$binding_valid) {
+        return false; // Can't renew - binding violated
+    }
+    
+    // Generate new dynamic fingerprint with updated timestamp
+    $new_fp = generate_dynamic_fingerprint($ip, $old_fp_data['session_id'] ?? null);
+    
+    // Verify JA3 hasn't changed (mandatory check)
+    $ja3_valid = verify_ja3_match($ip, $old_fp_data);
+    if (!$ja3_valid) {
+        return false; // JA3 mismatch - terminate
+    }
+    
+    // Save updated fingerprint with new timestamp
+    save_fingerprint($ip, $new_fp, $old_fp_data['session_id'] ?? null);
+    
+    // Update cookie with new fingerprint (silent renewal)
+    setcookie('fp_hash', $new_fp, time() + 86400, '/');
+    
+    // Log silent renewal
+    if (is_dir(__DIR__ . '/logs')) {
+        file_put_contents(
+            __DIR__ . '/logs/security.log',
+            date('Y-m-d H:i:s') . " | SILENT_RENEWAL | IP: {$ip} | " .
+            "Session age: " . (time() - ($old_fp_data['created_at'] ?? time())) . "s\n",
+            FILE_APPEND
+        );
+    }
+    
+    return true;
 }
 
 /**
@@ -1056,7 +1307,9 @@ function analyze_mouse_movements($ip) {
 
 /**
  * Detect idealized/perfect behavior patterns
- * Humans make mistakes and show variance - bots don't
+ * PHILOSOPHY: Humans are noisy; bots are perfect. REJECT PERFECTION.
+ * Always punish: excessive consistency, lack of hesitation, uniform responses
+ * Automatically increase risk score even with clean IPs
  */
 function detect_idealized_behavior($ip) {
     global $config;
@@ -1072,7 +1325,7 @@ function detect_idealized_behavior($ip) {
     
     $all_sessions = $behaviors[$ip]['sessions'];
     
-    // 1. Check for perfect timing (zero variance)
+    // 1. Check for perfect timing (zero variance) - HUMANS ARE NOISY
     $all_intervals = [];
     foreach ($all_sessions as $session) {
         if (isset($session['actions']) && count($session['actions']) > 2) {
@@ -1097,15 +1350,19 @@ function detect_idealized_behavior($ip) {
         
         $perfect_timing_threshold = $idealized_config['perfect_timing_threshold'] ?? 0.15;
         if ($cv < $perfect_timing_threshold) {
-            $penalty = $idealized_config['identical_path_penalty'] ?? 50;
+            $penalty = $idealized_config['excessive_consistency_penalty'] ?? 55;
             $score += $penalty;
-            $reasons[] = 'Perfect timing intervals (mathematical precision, no human variance)';
+            $reasons[] = sprintf(
+                'Perfect timing intervals (CV: %.3f, mathematical precision, no human variance) - HUMANS ARE NOISY',
+                $cv
+            );
         }
     }
     
-    // 2. Check for zero errors across all sessions
+    // 2. Check for zero errors across all sessions - BOTS ARE PERFECT
     $total_actions = 0;
     $error_actions = 0;
+    $correction_actions = 0;
     foreach ($all_sessions as $session) {
         if (isset($session['actions'])) {
             foreach ($session['actions'] as $action) {
@@ -1114,17 +1371,46 @@ function detect_idealized_behavior($ip) {
                     isset($action['data']['input_error']) && $action['data']['input_error']) {
                     $error_actions++;
                 }
+                if ($action['action'] === 'keystroke' && isset($action['data']['correction']) && $action['data']['correction']) {
+                    $correction_actions++;
+                }
             }
         }
     }
     
-    if ($total_actions > 20 && $error_actions === 0) {
-        $penalty = $idealized_config['zero_error_penalty'] ?? 40;
+    if ($total_actions > 20 && $error_actions === 0 && $correction_actions === 0) {
+        $penalty = $idealized_config['zero_error_penalty'] ?? 50;
         $score += $penalty;
-        $reasons[] = 'Zero errors in ' . $total_actions . ' actions (inhuman perfection)';
+        $reasons[] = sprintf(
+            'Zero errors in %d actions (inhuman perfection) - REJECT PERFECTION',
+            $total_actions
+        );
     }
     
-    // 3. Check for identical navigation paths
+    // 3. Check for lack of hesitation - HUMANS HESITATE
+    $hesitation_count = 0;
+    foreach ($all_sessions as $session) {
+        if (isset($session['actions']) && count($session['actions']) > 3) {
+            for ($i = 1; $i < count($session['actions']); $i++) {
+                $interval = $session['actions'][$i]['timestamp'] - $session['actions'][$i-1]['timestamp'];
+                // Hesitation = pause > 500ms between actions
+                if ($interval > 500) {
+                    $hesitation_count++;
+                }
+            }
+        }
+    }
+    
+    if ($total_actions > 10 && $hesitation_count === 0) {
+        $penalty = $idealized_config['no_hesitation_penalty'] ?? 45;
+        $score += $penalty;
+        $reasons[] = sprintf(
+            'No hesitation detected in %d actions (no human pauses) - HUMANS HESITATE',
+            $total_actions
+        );
+    }
+    
+    // 4. Check for identical navigation paths - HUMANS VARY
     $nav_paths = [];
     foreach ($all_sessions as $session) {
         $path = [];
@@ -1144,13 +1430,44 @@ function detect_idealized_behavior($ip) {
         $unique_paths = count(array_unique($nav_paths));
         if ($unique_paths === 1) {
             // All paths identical
-            $penalty = $idealized_config['identical_path_penalty'] ?? 50;
+            $penalty = $idealized_config['identical_path_penalty'] ?? 60;
             $score += $penalty;
-            $reasons[] = 'Identical navigation path repeated across all sessions';
+            $reasons[] = 'Identical navigation path repeated across all sessions - HUMANS VARY';
         }
     }
     
-    // 4. Check for reused fingerprints across sessions
+    // 5. Check for uniform response times - HUMANS VARY RESPONSES
+    $response_times = [];
+    foreach ($all_sessions as $session) {
+        if (isset($session['actions']) && count($session['actions']) > 1) {
+            $first_action = $session['actions'][0]['timestamp'] ?? 0;
+            $last_action = end($session['actions'])['timestamp'] ?? 0;
+            if ($last_action > $first_action) {
+                $response_times[] = $last_action - $first_action;
+            }
+        }
+    }
+    
+    if (count($response_times) >= 3) {
+        $avg_response = array_sum($response_times) / count($response_times);
+        $variance = 0;
+        foreach ($response_times as $time) {
+            $variance += pow($time - $avg_response, 2);
+        }
+        $variance = $variance / count($response_times);
+        $cv = $avg_response > 0 ? (sqrt($variance) / $avg_response) : 0;
+        
+        if ($cv < 0.2) {
+            $penalty = $idealized_config['uniform_response_penalty'] ?? 40;
+            $score += $penalty;
+            $reasons[] = sprintf(
+                'Uniform response times across sessions (CV: %.3f) - HUMANS VARY RESPONSES',
+                $cv
+            );
+        }
+    }
+    
+    // 6. Check for reused fingerprints across sessions - REPLAY ATTACK
     $fps = load_fingerprints();
     $fp_history = [];
     foreach ($fps as $ip_key => $fp_data) {
@@ -1163,10 +1480,19 @@ function detect_idealized_behavior($ip) {
     if (count($fp_history) > 1) {
         $unique_fps = count(array_unique($fp_history));
         if ($unique_fps === 1 && count($fp_history) >= 3) {
-            $penalty = $idealized_config['identical_fingerprint_penalty'] ?? 60;
+            $penalty = $idealized_config['identical_fingerprint_penalty'] ?? 70;
             $score += $penalty;
-            $reasons[] = 'Identical fingerprint reused ' . count($fp_history) . ' times (replay attack)';
+            $reasons[] = sprintf(
+                'Identical fingerprint reused %d times (replay attack) - REJECT PERFECTION',
+                count($fp_history)
+            );
         }
+    }
+    
+    // 7. Check for excessive consistency even with clean IPs
+    // This ensures clean IPs don't bypass perfection detection
+    if ($score > 0) {
+        $reasons[] = 'Risk increased regardless of IP reputation (perfection detected)';
     }
     
     return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
@@ -1220,6 +1546,238 @@ function analyze_session_continuity($ip) {
             $reasons[] = 'Suspicious session timing, missing resume logic';
             break;
         }
+    }
+    
+    return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
+}
+
+/**
+ * Get randomized evaluation window
+ * Makes evaluation windows unpredictable to prevent reverse engineering
+ * Static logic is learnable and therefore unacceptable
+ */
+function get_randomized_window($base_window_seconds, $config) {
+    if (!($config['evaluation_windows_randomized'] ?? true)) {
+        return $base_window_seconds;
+    }
+    
+    $variance_pct = ($config['window_variance'] ?? 20) / 100;
+    
+    // Add random variance +/- variance_pct
+    $variance = (mt_rand() / mt_getrandmax() * 2 - 1) * $variance_pct;
+    $randomized = $base_window_seconds * (1 + $variance);
+    
+    return max(1, $randomized); // At least 1 second
+}
+
+/**
+ * Randomize check order to prevent static logic detection
+ * Returns shuffled array of check names
+ */
+function randomize_check_order($config) {
+    if (!($config['evaluation_order_randomized'] ?? true)) {
+        return [
+            'temporal',
+            'noise',
+            'semantics',
+            'continuity',
+            'mouse',
+            'idealized',
+            'drift',
+            'entropy_memory'
+        ];
+    }
+    
+    $checks = [
+        'temporal',
+        'noise',
+        'semantics',
+        'continuity',
+        'mouse',
+        'idealized',
+        'drift',
+        'entropy_memory'
+    ];
+    
+    shuffle($checks);
+    return $checks;
+}
+
+/**
+ * Analyze timing entropy across multiple sessions (Entropy Memory)
+ * Stores and compares average time variance per fingerprint
+ * Detects automation through consistent timing with minimal variation
+ * NO reliance on mouse or buttons - purely time and physics
+ */
+function analyze_timing_entropy_memory($ip) {
+    global $config;
+    
+    $entropy_config = $config['entropy_memory'] ?? [];
+    if (!($entropy_config['enabled'] ?? true)) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $score = 0;
+    $reasons = [];
+    
+    // Load entropy memory storage
+    $entropy_file = __DIR__ . '/entropy_memory.json';
+    $entropy_data = [];
+    if (file_exists($entropy_file)) {
+        $entropy_data = json_decode(file_get_contents($entropy_file), true) ?: [];
+    }
+    
+    // Get current behavior data
+    $behaviors = load_behavior_data();
+    if (!isset($behaviors[$ip]) || !isset($behaviors[$ip]['sessions'])) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    $all_sessions = $behaviors[$ip]['sessions'];
+    $min_sessions = $entropy_config['min_sessions_for_comparison'] ?? 2;
+    
+    if (count($all_sessions) < $min_sessions) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    // Calculate timing statistics for each session
+    $session_stats = [];
+    foreach ($all_sessions as $session_id => $session) {
+        if (!isset($session['actions']) || count($session['actions']) < 3) {
+            continue;
+        }
+        
+        $intervals = [];
+        for ($i = 1; $i < count($session['actions']); $i++) {
+            $interval = $session['actions'][$i]['timestamp'] - $session['actions'][$i-1]['timestamp'];
+            $intervals[] = $interval;
+        }
+        
+        if (empty($intervals)) {
+            continue;
+        }
+        
+        $avg_interval = array_sum($intervals) / count($intervals);
+        $variance = 0;
+        foreach ($intervals as $interval) {
+            $variance += pow($interval - $avg_interval, 2);
+        }
+        $variance = $variance / count($intervals);
+        $std_dev = sqrt($variance);
+        
+        // Coefficient of variation (CV) - normalized measure of dispersion
+        $cv = $avg_interval > 0 ? ($std_dev / $avg_interval) : 0;
+        
+        $session_stats[] = [
+            'session_id' => $session_id,
+            'avg_interval' => $avg_interval,
+            'std_dev' => $std_dev,
+            'cv' => $cv,
+            'intervals' => $intervals
+        ];
+    }
+    
+    if (count($session_stats) < $min_sessions) {
+        return ['score' => 0, 'reasons' => []];
+    }
+    
+    // Store entropy memory for this IP
+    if (!isset($entropy_data[$ip])) {
+        $entropy_data[$ip] = [
+            'first_seen' => time(),
+            'sessions' => []
+        ];
+    }
+    
+    foreach ($session_stats as $stats) {
+        $entropy_data[$ip]['sessions'][$stats['session_id']] = [
+            'timestamp' => time(),
+            'avg_interval' => $stats['avg_interval'],
+            'std_dev' => $stats['std_dev'],
+            'cv' => $stats['cv']
+        ];
+    }
+    
+    $entropy_data[$ip]['last_updated'] = time();
+    
+    // Cleanup old entropy data (randomized retention window)
+    $base_retention_days = 7;
+    $retention_seconds = get_randomized_window($base_retention_days * 86400, $config);
+    $cutoff = time() - $retention_seconds;
+    foreach ($entropy_data as $ip_key => $data) {
+        if (($data['last_updated'] ?? 0) < $cutoff) {
+            unset($entropy_data[$ip_key]);
+        }
+    }
+    
+    file_put_contents($entropy_file, json_encode($entropy_data, JSON_PRETTY_PRINT));
+    
+    // CROSS-SESSION ANALYSIS: Compare timing patterns across sessions
+    $all_cvs = array_column($session_stats, 'cv');
+    $all_avg_intervals = array_column($session_stats, 'avg_interval');
+    
+    // Calculate consistency across sessions
+    $cv_variance = 0;
+    $avg_cv = array_sum($all_cvs) / count($all_cvs);
+    foreach ($all_cvs as $cv) {
+        $cv_variance += pow($cv - $avg_cv, 2);
+    }
+    $cv_variance = $cv_variance / count($all_cvs);
+    
+    // Calculate interval consistency
+    $interval_variance = 0;
+    $avg_of_avgs = array_sum($all_avg_intervals) / count($all_avg_intervals);
+    foreach ($all_avg_intervals as $avg) {
+        $interval_variance += pow($avg - $avg_of_avgs, 2);
+    }
+    $interval_variance = $interval_variance / count($all_avg_intervals);
+    $interval_cv = $avg_of_avgs > 0 ? (sqrt($interval_variance) / $avg_of_avgs) : 0;
+    
+    // DETECTION RULE: Consistent timing with minimal variation = Automation
+    $consistency_threshold = $entropy_config['consistency_threshold'] ?? 0.1;
+    
+    if ($avg_cv < $consistency_threshold) {
+        $penalty = $entropy_config['variance_penalty'] ?? 45;
+        $score += $penalty;
+        $reasons[] = sprintf(
+            'Consistent timing with minimal variation across sessions (CV: %.3f < %.3f threshold)',
+            $avg_cv,
+            $consistency_threshold
+        );
+    }
+    
+    // Check if timing is too consistent across sessions
+    if ($interval_cv < 0.15 && count($session_stats) >= 3) {
+        $score += 40;
+        $reasons[] = sprintf(
+            'Near-identical timing patterns across %d sessions (interval CV: %.3f)',
+            count($session_stats),
+            $interval_cv
+        );
+    }
+    
+    // Check for mathematical precision (all intervals within 5% of mean)
+    $precision_count = 0;
+    foreach ($session_stats as $stats) {
+        $within_precision = true;
+        foreach ($stats['intervals'] as $interval) {
+            $deviation_pct = abs($interval - $stats['avg_interval']) / $stats['avg_interval'];
+            if ($deviation_pct > 0.05) {
+                $within_precision = false;
+                break;
+            }
+        }
+        if ($within_precision && count($stats['intervals']) >= 3) {
+            $precision_count++;
+        }
+    }
+    
+    if ($precision_count >= 2) {
+        $score += 50;
+        $reasons[] = sprintf(
+            'Mathematical precision detected in %d sessions (all intervals within 5%% of mean)',
+            $precision_count
+        );
     }
     
     return ['score' => min($score, 100), 'reasons' => array_unique($reasons)];
@@ -1374,6 +1932,7 @@ function calculate_bot_confidence($ip) {
     $mouse = analyze_mouse_movements($ip);
     $idealized = detect_idealized_behavior($ip);
     $drift = detect_behavioral_drift($ip);
+    $entropy_memory = analyze_timing_entropy_memory($ip); // NEW: Cross-session entropy analysis
     
     // ============================================
     // DYNAMIC WEIGHTS WITH RANDOMIZATION
@@ -1381,13 +1940,14 @@ function calculate_bot_confidence($ip) {
     
     // Base weights for each domain
     $base_weights = [
-        'temporal' => 0.18,
-        'noise' => 0.13,
-        'semantics' => 0.13,
-        'continuity' => 0.13,
-        'mouse' => 0.18,
-        'idealized' => 0.13,
-        'drift' => 0.12
+        'temporal' => 0.15,
+        'noise' => 0.11,
+        'semantics' => 0.11,
+        'continuity' => 0.11,
+        'mouse' => 0.15,
+        'idealized' => 0.15,
+        'drift' => 0.10,
+        'entropy_memory' => 0.12 // NEW: Entropy memory analysis
     ];
     
     // Apply randomization to prevent reverse engineering
@@ -1441,6 +2001,7 @@ function calculate_bot_confidence($ip) {
     $mouse_adjusted = $apply_nonlinear($mouse['score']);
     $idealized_adjusted = $apply_nonlinear($idealized['score']);
     $drift_adjusted = $apply_nonlinear($drift['score']);
+    $entropy_adjusted = $apply_nonlinear($entropy_memory['score']); // NEW
     
     // Weighted average with dynamic weights
     $total_score = (
@@ -1450,7 +2011,8 @@ function calculate_bot_confidence($ip) {
         $continuity_adjusted * $weights['continuity'] +
         $mouse_adjusted * $weights['mouse'] +
         $idealized_adjusted * $weights['idealized'] +
-        $drift_adjusted * $weights['drift']
+        $drift_adjusted * $weights['drift'] +
+        $entropy_adjusted * $weights['entropy_memory'] // NEW
     );
     
     // Apply final non-linear transformation to total
@@ -1479,7 +2041,8 @@ function calculate_bot_confidence($ip) {
         $continuity['reasons'],
         $mouse['reasons'],
         $idealized['reasons'],
-        $drift['reasons']
+        $drift['reasons'],
+        $entropy_memory['reasons'] // NEW
     );
     
     // ============================================
@@ -1501,7 +2064,8 @@ function calculate_bot_confidence($ip) {
             'continuity' => $continuity['score'],
             'mouse' => $mouse['score'],
             'idealized' => $idealized['score'],
-            'drift' => $drift['score']
+            'drift' => $drift['score'],
+            'entropy_memory' => $entropy_memory['score'] // NEW
         ],
         'adjusted_scores' => $silent_scoring ? 'hidden' : [
             'temporal' => $temporal_adjusted,
@@ -1510,7 +2074,8 @@ function calculate_bot_confidence($ip) {
             'continuity' => $continuity_adjusted,
             'mouse' => $mouse_adjusted,
             'idealized' => $idealized_adjusted,
-            'drift' => $drift_adjusted
+            'drift' => $drift_adjusted,
+            'entropy_memory' => $entropy_adjusted // NEW
         ],
         'weights_used' => $silent_scoring ? 'hidden' : $weights,
         'thresholds_used' => $silent_scoring ? 'hidden' : [
@@ -1573,7 +2138,9 @@ function check_shadow_rate_limit($ip) {
 
 /**
  * Apply shadow enforcement to detected bot
- * Returns response that fools the bot into thinking it succeeded
+ * PHILOSOPHY: Provide correct-looking but meaningless responses
+ * Non-uniform delays, light throttling, NO phantom pages/fake elements
+ * Objective: Poison ML without harming UX for humans
  */
 function apply_shadow_enforcement($ip, $bot_score, $config) {
     // Check shadow mode configuration
@@ -1595,20 +2162,55 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
     // Silent rate limiting
     if ($tactics['silent_rate_limit'] ?? false) {
         if (!check_shadow_rate_limit($ip)) {
-            // Silently slow down the bot with artificial delay
-            // Note: This intentionally blocks to waste bot resources
-            // Use shorter delays if performance is a concern
-            $delay_ms = rand(2000, 5000); // 2-5 seconds in milliseconds
-            usleep($delay_ms * 1000); // Convert to microseconds
-            // Still continue to show fake success
+            // Apply non-uniform delay (prevents learning patterns)
+            if ($tactics['non_uniform_delays'] ?? true) {
+                // Vary delay based on request count to prevent pattern detection
+                $base_delay = rand(1500, 3500);
+                $jitter = rand(-500, 500); // Add jitter
+                $delay_ms = max(1000, $base_delay + $jitter);
+            } else {
+                $delay_ms = rand(2000, 5000);
+            }
+            usleep($delay_ms * 1000);
         }
     }
     
-    // Apply response delay to waste bot resources
-    // Note: This is intentional for bot deterrence
+    // Apply light throttling with non-uniform delays
+    if ($tactics['light_throttling'] ?? true) {
+        // Gradually increase delay based on bot score
+        $throttle_factor = ($bot_score - 50) / 50; // 0-1 range for scores 50-100
+        $throttle_factor = max(0, min(1, $throttle_factor));
+        
+        if ($throttle_factor > 0) {
+            $base_delay = $tactics['response_delay_min'] ?? 2000;
+            $max_delay = $tactics['response_delay_max'] ?? 5000;
+            $throttle_delay = $base_delay + ($throttle_factor * ($max_delay - $base_delay));
+            
+            // Add non-uniform jitter (prevents ML from learning the pattern)
+            if ($tactics['non_uniform_delays'] ?? true) {
+                $jitter = rand(-300, 300);
+                $throttle_delay += $jitter;
+            }
+            
+            usleep(max(0, $throttle_delay) * 1000);
+        }
+    }
+    
+    // Response delay with non-uniform timing
     if (isset($tactics['response_delay_min']) && isset($tactics['response_delay_max'])) {
-        $delay_ms = rand($tactics['response_delay_min'], $tactics['response_delay_max']);
-        usleep($delay_ms * 1000); // Convert ms to microseconds
+        if ($tactics['non_uniform_delays'] ?? true) {
+            // Non-uniform delays: harder to reverse engineer
+            $min = $tactics['response_delay_min'];
+            $max = $tactics['response_delay_max'];
+            $base_delay = rand($min, $max);
+            
+            // Add time-based variance (changes behavior over time)
+            $time_variance = (time() % 10) * 100; // 0-900ms variance based on time
+            $delay_ms = $base_delay + $time_variance;
+        } else {
+            $delay_ms = rand($tactics['response_delay_min'], $tactics['response_delay_max']);
+        }
+        usleep($delay_ms * 1000);
     }
     
     // Determine shadow tactic based on bot score
@@ -1625,12 +2227,14 @@ function apply_shadow_enforcement($ip, $bot_score, $config) {
 
 /**
  * Generate fake success response for shadow enforcement
- * Bot thinks it succeeded but actually gets useless data
+ * Correct-looking but meaningless data to poison ML training
+ * NO phantom pages or fake elements per requirements
  */
 function generate_fake_success_response($tactic_level) {
     switch ($tactic_level) {
         case 'shadow_harsh':
-            // Return completely fake data that looks real
+            // Return completely fake but correct-looking data
+            // Poison ML: looks valid, trains model incorrectly
             return [
                 'success' => true,
                 'message' => 'Request processed successfully',
@@ -1638,30 +2242,41 @@ function generate_fake_success_response($tactic_level) {
                     'id' => 'fake_' . uniqid(),
                     'status' => 'completed',
                     'timestamp' => time(),
-                    'items' => [] // Empty results
+                    'items' => [], // Empty results (meaningless)
+                    'total' => 0,
+                    'metadata' => [
+                        'processed' => true,
+                        'valid' => true,
+                        'checksum' => hash('sha256', 'meaningless_' . time())
+                    ]
                 ]
             ];
             
         case 'shadow_moderate':
-            // Return incomplete/truncated data
+            // Return incomplete/truncated data (light degradation)
+            // Poison ML: partial data trains model poorly
             return [
                 'success' => true,
-                'message' => 'Partial results',
+                'message' => 'Partial results available',
                 'data' => [
                     'id' => 'partial_' . uniqid(),
                     'status' => 'processing', // Perpetual processing state
-                    'progress' => rand(10, 90) // Random progress
+                    'progress' => rand(10, 90), // Random progress (never completes)
+                    'estimated_time' => rand(30, 300), // Fake ETA
+                    'items' => array_fill(0, rand(1, 3), ['id' => 'fake_item', 'data' => null])
                 ]
             ];
             
         case 'shadow_light':
-            // Subtle degradation
+            // Subtle degradation (queue/pending state)
+            // Poison ML: trains on delayed responses
             return [
                 'success' => true,
-                'message' => 'Request queued',
+                'message' => 'Request queued for processing',
                 'data' => [
                     'id' => 'queued_' . uniqid(),
                     'status' => 'pending',
+                    'queue_position' => rand(10, 100),
                     'estimated_time' => rand(300, 3600) // Random long delay
                 ]
             ];
@@ -1819,6 +2434,80 @@ $user_agent = $_SERVER["HTTP_USER_AGENT"] ?? "";
 
 // Session-network binding verification for returning visitors
 if (isset($_COOKIE['fp_hash']) && isset($_COOKIE['js_verified'])) {
+    // Apply silent session aging mechanism
+    $aging_action = apply_silent_aging($client_ip, $config);
+    
+    if ($aging_action === 'delay') {
+        // Trust too low, apply response delays and quality reduction
+        // This exhausts bots without affecting humans significantly
+        
+        // Log aging action
+        file_put_contents($LOG_FILE ?? __DIR__ . '/logs/antibot.log', 
+            date("Y-m-d H:i:s") . " | SILENT_AGING_DELAY | IP: {$client_ip} | Reason: Low trust, renewal failed\n", 
+            FILE_APPEND);
+        
+        // Quality reduction: Show slower loading but allow manual continue
+        // NO CAPTCHA and NO automatic refresh to prevent infinite loops
+        ?>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Loading...</title>
+            <style>
+                body {
+                    margin: 0;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    background: #f5f5f5;
+                }
+                .loader {
+                    text-align: center;
+                }
+                .spinner {
+                    border: 4px solid #f3f3f3;
+                    border-top: 4px solid #3498db;
+                    border-radius: 50%;
+                    width: 40px;
+                    height: 40px;
+                    animation: spin 1s linear infinite;
+                    margin: 0 auto 20px;
+                }
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                .continue-btn {
+                    margin-top: 20px;
+                    padding: 10px 20px;
+                    background: #3498db;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    text-decoration: none;
+                    display: inline-block;
+                }
+                .continue-btn:hover {
+                    background: #2980b9;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="loader">
+                <div class="spinner"></div>
+                <p>Verifying your session...</p>
+                <a href="<?php echo htmlspecialchars($_SERVER['REQUEST_URI']); ?>" class="continue-btn">Continue</a>
+            </div>
+        </body>
+        </html>
+        <?php
+        exit;
+    }
+    
     // Verify session-network binding
     $binding_valid = verify_session_binding($client_ip, $_COOKIE['fp_hash']);
     
@@ -2074,96 +2763,67 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 $is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
 
 if ($is_first_visit) {
-    // First visit: Show analysis page for 5 seconds to collect behavioral data
+    // First visit: Redirect to separate security check page to avoid output buffer issues
+    // This allows the application code to run cleanly after security check completes
     setcookie('analysis_done', 'yes', time() + 86400, '/');
-    ?>
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <title>Security Check</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <style>
-        body {
-          margin: 0;
-          padding: 0;
-          height: 100vh;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          background: #f8f9fa;
-          font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-        }
-        .analysis-container {
-          text-align: center;
-          padding: 40px;
-        }
-        .spinner {
-          width: 50px;
-          height: 50px;
-          margin: 0 auto 20px;
-          border: 4px solid #e0e0e0;
-          border-top: 4px solid #007bff;
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        .message {
-          font-size: 18px;
-          color: #333;
-          margin-bottom: 10px;
-        }
-        .submessage {
-          font-size: 14px;
-          color: #666;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="analysis-container">
-        <div class="spinner"></div>
-        <div class="message">Checking your connection security...</div>
-        <div class="submessage">This will only take a moment</div>
-      </div>
-      <!-- Include behavioral tracking script -->
-      <script src="antibot-tracking.js"></script>
-      <script>
-        // Store original URL
-        try {
-          localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
-        } catch(e) {}
-        
-        // Force send behavioral data and wait for completion before reload
-        setTimeout(async function() {
-          if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
-            // Send data and wait a bit for it to complete
-            window.behaviorTracker.sendToServer();
-            // Wait 500ms for sendBeacon to complete
-            await new Promise(resolve => setTimeout(resolve, 600));
-          }
-          // After data is sent, navigate to same URL to trigger analysis
-          window.location.href = window.location.href;
-        }, 4400);
-      </script>
-    </body>
-    </html>
-    <?php
+    
+    // Log the first visit
+    log_access_attempt($client_ip, 'first_visit_redirect', 0, ['note' => 'Redirecting to security check page'], []);
+    
+    // Get the current request URI to return to after check
+    $return_url = $_SERVER['REQUEST_URI'];
+    
+    // Redirect to security check page with return URL
+    header('Location: antibot-check.php?return=' . urlencode($return_url));
     exit;
 }
 
 // Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
 if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
-    $bot_analysis = calculate_bot_confidence($client_ip);
-    
-    // Extract bot characteristics for logging
+    // Check if we have sufficient behavioral data before analyzing
     $behavior_data = load_behavior_data();
     $ip_data = $behavior_data[$client_ip] ?? [];
-    $characteristics = [];
+    $has_sufficient_data = false;
     
-    if (isset($ip_data['sessions'])) {
+    // We need at least some actions recorded to make a decision
+    if (isset($ip_data['sessions']) && !empty($ip_data['sessions'])) {
+        $total_actions = 0;
+        foreach ($ip_data['sessions'] as $session) {
+            if (isset($session['actions'])) {
+                $total_actions += count($session['actions']);
+            }
+        }
+        // Require at least 3 actions to have meaningful data
+        $has_sufficient_data = $total_actions >= 3;
+    }
+    
+    // If insufficient data, assume human and let them through
+    // Only show verification for users who are actually flagged as suspicious
+    if (!$has_sufficient_data) {
+        // Generate dynamic fingerprint for this session
+        $dynamic_fp = generate_dynamic_fingerprint($client_ip);
+        save_fingerprint($client_ip, $dynamic_fp);
+        
+        // Assume human - set cookies and allow access
+        setcookie('js_verified', 'yes', time() + 86400, '/');
+        setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
+        
+        // Log as human with insufficient data
+        $characteristics = ['note' => 'First-time visitor, insufficient data - assumed human'];
+        log_access_attempt($client_ip, 'human', 0, ['is_confident_human' => true, 'reasons' => ['Insufficient data, assumed human']], $characteristics);
+        
+        // Allow the page to continue loading - no verification needed
+        $bot_analysis = null; // Skip further analysis
+    } else {
+        // We have sufficient data, perform analysis
+        $bot_analysis = calculate_bot_confidence($client_ip);
+    }
+    
+    // Extract bot characteristics for logging
+    $characteristics = $characteristics ?? [];
+    
+    // Only extract detailed characteristics if we have sufficient data
+    if (isset($ip_data['sessions']) && $has_sufficient_data) {
         $sessions = $ip_data['sessions'];
         $characteristics['sessions'] = count($sessions);
         
@@ -2236,9 +2896,11 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         }
     }
     
-    // Handle likely bots with shadow enforcement
-    if ($bot_analysis['is_likely_bot']) {
-        $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
+    // Only continue with analysis if we have bot_analysis data
+    if ($bot_analysis !== null) {
+        // Handle likely bots with shadow enforcement
+        if ($bot_analysis['is_likely_bot']) {
+            $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
         
         // Log to admin dashboard (hashed for security)
         log_access_attempt($client_ip, 'bot', $bot_analysis['confidence'], $bot_analysis, $characteristics);
@@ -2328,21 +2990,23 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         }
     }
     
-    // Seamless access for confident humans - set cookies and allow entry
-    if ($bot_analysis['is_confident_human']) {
-        // Generate dynamic fingerprint with session-network binding
-        $dynamic_fp = generate_dynamic_fingerprint($client_ip);
-        save_fingerprint($client_ip, $dynamic_fp);
+    // Only continue with detailed analysis and actions if we have bot_analysis data
+    if ($bot_analysis !== null) {
+        // Seamless access for confident humans - set cookies and allow entry
+        if ($bot_analysis['is_confident_human']) {
+            // Generate dynamic fingerprint with session-network binding
+            $dynamic_fp = generate_dynamic_fingerprint($client_ip);
+            save_fingerprint($client_ip, $dynamic_fp);
+            
+            setcookie('js_verified', 'yes', time() + 86400, '/');
+            setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
+            // Log to admin dashboard
+            log_access_attempt($client_ip, 'human', $bot_analysis['confidence'], $bot_analysis, $characteristics);
+            // Allow the page to continue loading - no exit, no redirect
+        }
         
-        setcookie('js_verified', 'yes', time() + 86400, '/');
-        setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
-        // Log to admin dashboard
-        log_access_attempt($client_ip, 'human', $bot_analysis['confidence'], $bot_analysis, $characteristics);
-        // Allow the page to continue loading - no exit, no redirect
-    }
-    
-    // Show warning UI only for uncertain cases
-    if ($bot_analysis['is_uncertain']) {
+        // Show warning UI only for uncertain cases
+        if ($bot_analysis['is_uncertain']) {
         // Generate dynamic fingerprint for this session
         $dynamic_fp = generate_dynamic_fingerprint($client_ip);
         save_fingerprint($client_ip, $dynamic_fp);
@@ -2642,6 +3306,8 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         <?php
         exit;
     }
+    } // End of bot_analysis !== null check (for confident_human and is_uncertain)
+    } // End of bot_analysis !== null check (for is_likely_bot)
 }
 
 // If we reach here, allow the page to continue loading

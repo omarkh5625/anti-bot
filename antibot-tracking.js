@@ -3,11 +3,17 @@
  * This script tracks user behavior to distinguish bots from humans
  * 
  * Detection Domains:
- * 1. Temporal Behavior - Track interaction timing patterns
+ * 1. Temporal Behavior - Track interaction timing patterns (PRIMARY)
  * 2. Interaction Noise - Monitor errors, hesitations, cancellations
  * 3. UI Semantics - Observe interaction with visual elements
  * 4. Session Continuity - Track navigation patterns
  * 5. Automation Detection - Selenium, WebDriver, Headless browsers
+ * 
+ * PHILOSOPHY: Move beyond mouse dependency
+ * - Non-movement does NOT imply bot activity
+ * - Focus on timing variance, request spacing, network jitter
+ * - Drift over time is analyzed server-side
+ * - Mouse analysis is OPTIONAL and supplementary only
  */
 
 (function() {
