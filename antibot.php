@@ -2883,7 +2883,10 @@ if ($is_first_visit) {
     </body>
     </html>
     <?php
-    exit;
+    // DO NOT exit - allow application code to run after security check display
+    // The page will reload after data collection, and analysis happens on next request
+    log_access_attempt($client_ip, 'first_visit_check_shown', 0, ['note' => 'Security check shown, continuing to app code'], []);
+    // No exit here - page continues
 }
 
 // Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
