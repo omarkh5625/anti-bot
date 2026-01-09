@@ -2829,11 +2829,14 @@ if ($is_first_visit) {
         // Set a flag in sessionStorage to prevent infinite loops
         if (sessionStorage.getItem('antibot_first_check_done')) {
           // Already did first check, skip directly to verification
-          var currentUrl = window.location.href;
-          // Remove any existing _ab_skip parameter to avoid duplicates
-          currentUrl = currentUrl.replace(/([?&])_ab_skip=1(&|$)/, '$1').replace(/[?&]$/, '');
-          // Add _ab_skip parameter
-          window.location.href = currentUrl + (currentUrl.includes('?') ? '&' : '?') + '_ab_skip=1';
+          // But only redirect if _ab_skip is NOT already in the URL
+          if (!window.location.href.includes('_ab_skip=1')) {
+            var currentUrl = window.location.href;
+            // Remove ALL existing _ab_skip parameters to avoid duplicates
+            currentUrl = currentUrl.replace(/([?&])_ab_skip=1/g, '').replace(/[?&]+$/, '').replace(/\?&/, '?');
+            // Add single _ab_skip parameter
+            window.location.href = currentUrl + (currentUrl.includes('?') ? '&' : '?') + '_ab_skip=1';
+          }
         } else {
           sessionStorage.setItem('antibot_first_check_done', '1');
           
