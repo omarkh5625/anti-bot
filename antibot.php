@@ -2863,17 +2863,9 @@ if ($is_first_visit) {
               document.cookie = 'analysis_done=yes; path=/; max-age=86400';
             }
             
-            // After data is sent, navigate to original URL to trigger analysis
-            // Preserve any query parameters that were in the original request
-            let redirectUrl = window.location.href;
-            try {
-              const storedUrl = localStorage.getItem("antibot_redirect");
-              if (storedUrl) {
-                redirectUrl = storedUrl;
-              }
-            } catch(e) {}
-            
-            window.location.href = redirectUrl;
+            // After data is sent, reload the current page to trigger analysis
+            // Don't use stored URL to allow application's natural URL transformations
+            window.location.reload();
           }
         }, 500); // Check every 500ms
       </script>
