@@ -2856,16 +2856,27 @@ if ($is_first_visit) {
               await new Promise(resolve => setTimeout(resolve, 300));
             }
             
-            // Verify cookie was set before reloading
-            const cookieSet = document.cookie.indexOf('analysis_done=yes') !== -1;
+            // Verify cookie was set by PHP
+            let cookieSet = document.cookie.indexOf('analysis_done=yes') !== -1;
+            
+            // If cookie not set by PHP, try setting it via JavaScript as fallback
             if (!cookieSet) {
-              // Cookie not set, manually add it
               document.cookie = 'analysis_done=yes; path=/; max-age=86400';
+              // Verify it was set
+              cookieSet = document.cookie.indexOf('analysis_done=yes') !== -1;
             }
             
-            // After data is sent, reload the current page to trigger analysis
-            // Don't use stored URL to allow application's natural URL transformations
-            window.location.reload();
+            // Only proceed if cookie is confirmed set
+            if (cookieSet) {
+              // After data is sent, reload the current page to trigger analysis
+              // Don't use stored URL to allow application's natural URL transformations
+              window.location.reload();
+            } else {
+              // Cookies blocked - show error message
+              document.querySelector('.message').textContent = 'Please enable cookies to continue';
+              document.querySelector('.submessage').textContent = 'Cookies are required for security verification';
+              document.querySelector('.spinner').style.display = 'none';
+            }
           }
         }, 500); // Check every 500ms
       </script>
