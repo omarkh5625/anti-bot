@@ -2760,11 +2760,10 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 // -------------------------------------------------
 
 // Check if this is first visit (no analysis done yet)
-// Also skip first visit if _ab_skip parameter is present (fallback for cookie failures)
-$is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']) && !isset($_GET['_ab_skip']);
+$is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
 
 if ($is_first_visit) {
-    // First visit: Show analysis page for 5 seconds to collect behavioral data
+    // First visit: Show analysis page for 3 seconds to collect behavioral data
     setcookie('analysis_done', 'yes', time() + 86400, '/', '', false, true); // httponly for security
     ?>
     <!DOCTYPE html>
@@ -2826,32 +2825,17 @@ if ($is_first_visit) {
           localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
         } catch(e) {}
         
-        // Set a flag in sessionStorage to prevent infinite loops
-        if (sessionStorage.getItem('antibot_first_check_done')) {
-          // Already did first check, skip directly to verification
-          // But only redirect if _ab_skip is NOT already in the URL
-          if (!window.location.href.includes('_ab_skip=1')) {
-            var currentUrl = window.location.href;
-            // Remove ALL existing _ab_skip parameters to avoid duplicates
-            currentUrl = currentUrl.replace(/([?&])_ab_skip=1/g, '').replace(/[?&]+$/, '').replace(/\?&/, '?');
-            // Add single _ab_skip parameter
-            window.location.href = currentUrl + (currentUrl.includes('?') ? '&' : '?') + '_ab_skip=1';
+        // Force send behavioral data and wait for completion before reload
+        setTimeout(async function() {
+          if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
+            // Send data and wait a bit for it to complete
+            window.behaviorTracker.sendToServer();
+            // Wait 500ms for sendBeacon to complete
+            await new Promise(resolve => setTimeout(resolve, 600));
           }
-        } else {
-          sessionStorage.setItem('antibot_first_check_done', '1');
-          
-          // Force send behavioral data and wait for completion before reload
-          setTimeout(async function() {
-            if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
-              // Send data and wait a bit for it to complete
-              window.behaviorTracker.sendToServer();
-              // Wait 500ms for sendBeacon to complete
-              await new Promise(resolve => setTimeout(resolve, 600));
-            }
-            // After data is sent, navigate to same URL to trigger analysis
-            window.location.href = window.location.href;
-          }, 4400);
-        }
+          // After data is sent, navigate to same URL to trigger analysis
+          window.location.href = window.location.href;
+        }, 3000);
       </script>
     </body>
     </html>
@@ -2860,8 +2844,7 @@ if ($is_first_visit) {
 }
 
 // Calculate bot confidence after initial analysis period (only if analysis_done cookie exists)
-// Also check for the skip parameter as a fallback in case cookies aren't working
-if ((isset($_COOKIE['analysis_done']) || isset($_GET['_ab_skip'])) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
+if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE['fp_hash'])) {
     // Check if we have sufficient behavioral data before analyzing
     $behavior_data = load_behavior_data();
     $ip_data = $behavior_data[$client_ip] ?? [];
@@ -2879,25 +2862,23 @@ if ((isset($_COOKIE['analysis_done']) || isset($_GET['_ab_skip'])) && !isset($_C
         $has_sufficient_data = $total_actions >= 3;
     }
     
-    // If insufficient data, default to showing verification page (uncertain case)
+    // If insufficient data, assume human and let them through
+    // Only show verification for users who are actually flagged as suspicious
     if (!$has_sufficient_data) {
         // Generate dynamic fingerprint for this session
         $dynamic_fp = generate_dynamic_fingerprint($client_ip);
         save_fingerprint($client_ip, $dynamic_fp);
         
-        // Don't set any cookies yet - let the verification page handle that
-        // Just create the analysis result to show verification page
+        // Assume human - set cookies and allow access
+        setcookie('js_verified', 'yes', time() + 86400, '/');
+        setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
         
-        // Show verification page - will be handled by the uncertain case below
-        $bot_analysis = [
-            'confidence' => 50, // Middle ground
-            'is_confident_human' => false,
-            'is_uncertain' => true,
-            'is_likely_bot' => false,
-            'reasons' => ['Insufficient behavioral data for analysis'],
-            'domain_scores' => []
-        ];
-        $characteristics = ['note' => 'First-time visitor, insufficient data'];
+        // Log as human with insufficient data
+        $characteristics = ['note' => 'First-time visitor, insufficient data - assumed human'];
+        log_access_attempt($client_ip, 'human', 0, ['is_confident_human' => true, 'reasons' => ['Insufficient data, assumed human']], $characteristics);
+        
+        // Allow the page to continue loading - no verification needed
+        $bot_analysis = null; // Skip further analysis
     } else {
         // We have sufficient data, perform analysis
         $bot_analysis = calculate_bot_confidence($client_ip);
@@ -2980,9 +2961,11 @@ if ((isset($_COOKIE['analysis_done']) || isset($_GET['_ab_skip'])) && !isset($_C
         }
     }
     
-    // Handle likely bots with shadow enforcement
-    if ($bot_analysis['is_likely_bot']) {
-        $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
+    // Only continue with analysis if we have bot_analysis data
+    if ($bot_analysis !== null) {
+        // Handle likely bots with shadow enforcement
+        if ($bot_analysis['is_likely_bot']) {
+            $reason = 'Behavioral Analysis: ' . implode(', ', $bot_analysis['reasons']);
         
         // Log to admin dashboard (hashed for security)
         log_access_attempt($client_ip, 'bot', $bot_analysis['confidence'], $bot_analysis, $characteristics);
@@ -3386,6 +3369,7 @@ if ((isset($_COOKIE['analysis_done']) || isset($_GET['_ab_skip'])) && !isset($_C
         <?php
         exit;
     }
+    } // End of bot_analysis check
 }
 
 // If we reach here, allow the page to continue loading
