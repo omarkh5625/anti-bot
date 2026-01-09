@@ -3087,21 +3087,23 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         }
     }
     
-    // Seamless access for confident humans - set cookies and allow entry
-    if ($bot_analysis['is_confident_human']) {
-        // Generate dynamic fingerprint with session-network binding
-        $dynamic_fp = generate_dynamic_fingerprint($client_ip);
-        save_fingerprint($client_ip, $dynamic_fp);
+    // Only continue with detailed analysis and actions if we have bot_analysis data
+    if ($bot_analysis !== null) {
+        // Seamless access for confident humans - set cookies and allow entry
+        if ($bot_analysis['is_confident_human']) {
+            // Generate dynamic fingerprint with session-network binding
+            $dynamic_fp = generate_dynamic_fingerprint($client_ip);
+            save_fingerprint($client_ip, $dynamic_fp);
+            
+            setcookie('js_verified', 'yes', time() + 86400, '/');
+            setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
+            // Log to admin dashboard
+            log_access_attempt($client_ip, 'human', $bot_analysis['confidence'], $bot_analysis, $characteristics);
+            // Allow the page to continue loading - no exit, no redirect
+        }
         
-        setcookie('js_verified', 'yes', time() + 86400, '/');
-        setcookie('fp_hash', $dynamic_fp, time() + 86400, '/');
-        // Log to admin dashboard
-        log_access_attempt($client_ip, 'human', $bot_analysis['confidence'], $bot_analysis, $characteristics);
-        // Allow the page to continue loading - no exit, no redirect
-    }
-    
-    // Show warning UI only for uncertain cases
-    if ($bot_analysis['is_uncertain']) {
+        // Show warning UI only for uncertain cases
+        if ($bot_analysis['is_uncertain']) {
         // Generate dynamic fingerprint for this session
         $dynamic_fp = generate_dynamic_fingerprint($client_ip);
         save_fingerprint($client_ip, $dynamic_fp);
@@ -3401,7 +3403,8 @@ if (isset($_COOKIE['analysis_done']) && !isset($_COOKIE['js_verified'], $_COOKIE
         <?php
         exit;
     }
-    } // End of bot_analysis check
+    } // End of bot_analysis !== null check (for confident_human and is_uncertain)
+    } // End of bot_analysis !== null check (for is_likely_bot)
 }
 
 // If we reach here, allow the page to continue loading
