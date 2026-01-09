@@ -2763,8 +2763,9 @@ file_put_contents($LOG_FILE, $log_line, FILE_APPEND);
 $is_first_visit = !isset($_COOKIE['js_verified']) && !isset($_COOKIE['fp_hash']) && !isset($_COOKIE['analysis_done']);
 
 if ($is_first_visit) {
-    // First visit: Show analysis page for 3 seconds to collect behavioral data
-    setcookie('analysis_done', 'yes', time() + 86400, '/', '', false, true); // httponly for security
+    // First visit: Show analysis page to collect behavioral data
+    // Set cookie WITHOUT httponly so JavaScript can verify it was set
+    setcookie('analysis_done', 'yes', time() + 86400, '/');
     ?>
     <!DOCTYPE html>
     <html lang="en">
@@ -2825,17 +2826,47 @@ if ($is_first_visit) {
           localStorage.setItem("antibot_redirect", <?php echo json_encode($_SERVER['REQUEST_URI']); ?>);
         } catch(e) {}
         
-        // Force send behavioral data and wait for completion before reload
-        setTimeout(async function() {
-          if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
-            // Send data and wait a bit for it to complete
-            window.behaviorTracker.sendToServer();
-            // Wait 500ms for sendBeacon to complete
-            await new Promise(resolve => setTimeout(resolve, 600));
+        // Function to check if enough behavioral data has been collected
+        function checkBehavioralData() {
+          // Check if tracker has collected sufficient actions
+          if (window.behaviorTracker) {
+            const sessionData = window.behaviorTracker.getSessionData ? window.behaviorTracker.getSessionData() : null;
+            if (sessionData && sessionData.actions && sessionData.actions.length >= 3) {
+              return true; // Sufficient data
+            }
           }
-          // After data is sent, navigate to same URL to trigger analysis
-          window.location.href = window.location.href;
-        }, 3000);
+          return false;
+        }
+        
+        // Wait for behavioral data collection with dynamic timing
+        let attempts = 0;
+        const maxAttempts = 10; // Maximum 5 seconds (10 * 500ms)
+        
+        const checkInterval = setInterval(async function() {
+          attempts++;
+          
+          // Check if we have enough data OR reached timeout
+          if (checkBehavioralData() || attempts >= maxAttempts) {
+            clearInterval(checkInterval);
+            
+            // Send data
+            if (window.behaviorTracker && typeof window.behaviorTracker.sendToServer === 'function') {
+              window.behaviorTracker.sendToServer();
+              // Wait for sendBeacon to complete
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+            
+            // Verify cookie was set before reloading
+            const cookieSet = document.cookie.indexOf('analysis_done=yes') !== -1;
+            if (!cookieSet) {
+              // Cookie not set, manually add it
+              document.cookie = 'analysis_done=yes; path=/; max-age=86400';
+            }
+            
+            // After data is sent, navigate to same URL to trigger analysis
+            window.location.href = window.location.href;
+          }
+        }, 500); // Check every 500ms
       </script>
     </body>
     </html>
